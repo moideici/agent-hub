@@ -110,6 +110,9 @@ Surcharge par projet (optionnel) dans `<repo>/.agent-hub.json` :
 - Le prompt impose : rester dans le worktree, ne pas committer/pusher, pas de secrets, pas de réseau.
 - La relecture (`ah review`) est en `read-only` ; le diff est traité comme donnée, pas comme instructions.
 - Le hub ne fait **jamais** de `git push`.
+- Les dépendances liées dans un worktree (junction `node_modules`) sont **retirées avant** toute suppression du worktree, et
+  leur cible n'est jamais touchée. Correctif du 27/10/2026 : avant lui, `ah merge`/`ah clean` pouvait vider le `node_modules`
+  du dépôt principal sous Windows (test de régression dans `test/pipeline.test.mjs`).
 
 ## Validé en réel (27/10/2026)
 Avec le vrai Codex 0.164 (compte `b`, sandbox `unelevated`) : `ah run` (tâche triviale puis tâche réelle avec tests : 23 tests

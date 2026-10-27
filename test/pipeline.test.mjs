@@ -132,6 +132,30 @@ test('deux dossiers = même compte ChatGPT: dédoublonnés, --acct explicite ref
   assert.equal(JSON.parse(ok.stdout).attempts.length, 1);
 });
 
+test('nettoyage: le node_modules lié n\'est JAMAIS supprimé avec le worktree (régression du 27/10/2026)', () => {
+  const t = setup();
+  // un vrai node_modules dans le dépôt principal (détecté et lié dans le worktree)
+  const nm = path.join(t.repo, 'node_modules', 'pkg');
+  fs.mkdirSync(nm, { recursive: true });
+  fs.writeFileSync(path.join(nm, 'index.js'), 'module.exports = 1;\n');
+  const r = t.ah('run', t.brief, '--json');
+  assert.equal(r.status, 0, r.stderr + r.stdout);
+  const run = JSON.parse(r.stdout);
+  assert.deepEqual(run.linked, ['node_modules']);
+  assert.equal(fs.lstatSync(path.join(run.worktree, 'node_modules')).isSymbolicLink(), true);
+  const m = t.ah('merge', run.id);
+  assert.equal(m.status, 0, m.stderr + m.stdout);
+  assert.equal(fs.existsSync(run.worktree), false, 'worktree supprimé');
+  assert.equal(fs.existsSync(path.join(nm, 'index.js')), true, 'node_modules du dépôt principal intact après merge');
+  // même garantie via `ah clean` d'un run non fusionné
+  const r2 = t.ah('run', t.brief, '--json');
+  const run2 = JSON.parse(r2.stdout);
+  const c = t.ah('clean', run2.id, '--force');
+  assert.equal(c.status, 0, c.stderr + c.stdout);
+  assert.equal(fs.existsSync(run2.worktree), false);
+  assert.equal(fs.existsSync(path.join(nm, 'index.js')), true, 'node_modules du dépôt principal intact après clean');
+});
+
 test('dépôt non git: message clair', () => {
   const t = setup();
   const plain = fs.mkdtempSync(path.join(os.tmpdir(), 'ah-plain-'));
