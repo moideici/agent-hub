@@ -78,7 +78,7 @@ Codes de sortie de `ah run` : `0` ok · `1` échec · `2` quota atteint · `3` t
    (`--include-dirty` recopie les modifications locales non commitées).
 3. Lie `node_modules` du dépôt dans le worktree s'il existe (junction), exécute `setup` si configuré.
 4. Lance `codex exec --json -s workspace-write` dans le worktree : prompt sur **stdin**, `--ignore-user-config`
-   (pas de plugins/MCP perso), `CODEX_HOME` du compte choisi, sandbox Windows `elevated` si disponible sinon `unelevated`.
+   (pas de plugins/MCP perso), `CODEX_HOME` du compte choisi, sandbox Windows `unelevated` (jamais d'UAC).
 5. Commit les changements sur la branche (identité `agent-hub`), calcule le diff, **relance les tests lui-même**.
 6. Écrit tout dans `~/.agent-hub/runs/<dépôt>/<id>/` : `run.json`, `brief.md`, `prompt.md`, `events.jsonl`,
    `last.txt`, `diff.patch`, `test.log`, `stderr.log`.
@@ -125,8 +125,9 @@ La détection de quota a été vérifiée sur le compte épuisé (message « try
 - Un seul agent exécutant (Codex) : Claude Code est le chef, il n'est pas dispatchable par `ah` (piste v2 : adaptateur `claude -p`).
 - Les dépendances autres que `node_modules` (venv Python, `target/`…) ne sont pas partagées : utilise `setup`.
 - Les fichiers non suivis ignorés par git (`.env`, builds) ne sont pas présents dans le worktree, c'est voulu.
-- Sandbox Windows `elevated` : nécessite l'installation préalable par l'app/CLI Codex dans le `CODEX_HOME` du compte
-  (compte `a` : fait). Pour un autre compte, `ah` retombe sur `unelevated`.
+- Sandbox Windows : `ah` force `unelevated` (réglage `windowsSandbox: "auto"` = `unelevated`). Le mode `elevated` ne
+  s'active que si on écrit `"windowsSandbox": "elevated"` : il déclenche la fenêtre UAC « codex-windows-sandbox-setup.exe »
+  presque à chaque commande (constaté le 2026-10-27 avec le compte `a` sur un projet à nombreux runs).
 
 ## Développement
 ```powershell
