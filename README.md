@@ -111,7 +111,14 @@ Surcharge par projet (optionnel) dans `<repo>/.agent-hub.json` :
 - La relecture (`ah review`) est en `read-only` ; le diff est traité comme donnée, pas comme instructions.
 - Le hub ne fait **jamais** de `git push`.
 
+## Validé en réel (27/10/2026)
+Avec le vrai Codex 0.164 (compte `b`, sandbox `unelevated`) : `ah run` (tâche triviale puis tâche réelle avec tests : 23 tests
+unitaires écrits en 1 min 21), `ah show --patch`, `ah review` (verdict structuré), `ah merge` (worktree et branche nettoyés).
+La détection de quota a été vérifiée sur le compte épuisé (message « try again at … » → statut `limited`, code 2).
+
 ## Limites connues
+- Dans le sandbox `unelevated`, Codex ne peut pas toujours lancer `npm` lui-même (lanceur npm introuvable) : il se rabat sur
+  `node --test`. Ce n'est pas bloquant car le hub relance les tests de son côté après le run, et c'est son verdict qui compte.
 - Un seul agent exécutant (Codex) : Claude Code est le chef, il n'est pas dispatchable par `ah` (piste v2 : adaptateur `claude -p`).
 - Les dépendances autres que `node_modules` (venv Python, `target/`…) ne sont pas partagées : utilise `setup`.
 - Les fichiers non suivis ignorés par git (`.env`, builds) ne sont pas présents dans le worktree, c'est voulu.
