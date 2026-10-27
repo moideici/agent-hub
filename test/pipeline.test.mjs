@@ -116,6 +116,22 @@ test('--acct auto refusé tant que autoRotate est désactivé', () => {
   assert.match(r.stderr, /désactivée/);
 });
 
+test('deux dossiers = même compte ChatGPT: dédoublonnés, --acct explicite refusé', () => {
+  const t = setup();
+  for (const n of ['a', 'b']) {
+    fs.writeFileSync(path.join(t.tmp, 'home-' + n, 'auth.json'), JSON.stringify({ tokens: { account_id: 'same-id' } }));
+  }
+  const r = t.ah('run', t.brief, '--acct', 'b');
+  assert.equal(r.status, 1);
+  assert.match(r.stderr, /même compte ChatGPT que "a"/);
+  const acc = JSON.parse(t.ah('accounts', '--json').stdout);
+  assert.equal(acc.find((x) => x.name === 'b').duplicateOf, 'a');
+  // en mode auto, un seul compte reste candidat
+  const ok = t.ah('run', t.brief, '--acct', 'auto', '--json');
+  assert.equal(ok.status, 0, ok.stderr + ok.stdout);
+  assert.equal(JSON.parse(ok.stdout).attempts.length, 1);
+});
+
 test('dépôt non git: message clair', () => {
   const t = setup();
   const plain = fs.mkdtempSync(path.join(os.tmpdir(), 'ah-plain-'));

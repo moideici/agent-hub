@@ -45,7 +45,9 @@ Ajouter un compte `b` :
 $env:CODEX_HOME = "$HOME\.codex-accounts\b"
 codex login --device-auth       # ouvre le lien dans une fenêtre privée, connecte le BON compte, saisis le code
 ```
-`ah accounts` affiche l'état de connexion et les quotas atteints. Les fichiers `auth.json` sont des secrets :
+`ah accounts` affiche l'état de connexion et les quotas atteints. Si deux dossiers contiennent en réalité le même
+compte ChatGPT (même `account_id`, donc même quota — typique quand le navigateur était encore connecté au premier
+compte), `ah` le signale (`⚠ MÊME compte…`), l'ignore et refuse `--acct <doublon>`. Les fichiers `auth.json` sont des secrets :
 ils restent hors des dépôts.
 
 **Quota** : Codex a une fenêtre de 5 h + un plafond hebdomadaire par compte. Quand il est atteint, `ah` le détecte
