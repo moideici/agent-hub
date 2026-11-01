@@ -559,6 +559,7 @@ function taskPanel(t) {
         ['Assignée à', t.assignee ? h('span', { class: 'stat' }, avatar(t.assignee, true), name(t.assignee)) : 'Personne'],
         ['Priorité', L.PRIORITY_LABEL[t.priority]],
         t.deps?.length ? ['Dépend de', t.deps.join(', ')] : null,
+        t.sandbox === 'read-only' ? ['Mode', 'Audit en lecture seule'] : null,
         t.project ? ['Dossier', h('span', { class: 'mono' }, t.project)] : null,
         ['Créée par', name(t.createdBy)],
         ['Mise à jour', L.relativeTime(t.updatedAt)],
@@ -639,13 +640,14 @@ function openNewTask() {
   const project = h('select', { class: 'input', 'aria-label': 'Projet' }, h('option', { value: '' }, 'Aucun projet'), known.map((p) => h('option', { value: p.path, selected: p.path === preselect }, `${p.name}`)));
   const assignee = h('select', { class: 'input', 'aria-label': 'Assigner à' }, h('option', { value: '' }, 'Personne pour l’instant'),
     ['codex:a', 'codex:b'].map((a) => h('option', { value: a }, name(a))), st.sessions.filter((s) => s.status === 'running').map((s) => h('option', { value: s.id }, s.title)));
+  const audit = h('input', { type: 'checkbox' });
   const prio = h('select', { class: 'input', 'aria-label': 'Priorité' }, L.PRIORITY_LABEL.map((l, i) => h('option', { value: i, selected: i === 1 }, l)));
   const open = st.tasks.filter(L.isOpen);
   const depBoxes = open.map((t) => h('label', { class: 'check' }, h('input', { type: 'checkbox', value: t.id }), h('span', { class: 'clip' }, `${t.id} · ${t.title}`)));
   const form = h('form', { method: 'dialog', on: { submit: async (e) => {
     e.preventDefault();
     const deps = depBoxes.map((l) => l.firstChild).filter((c) => c.checked).map((c) => c.value);
-    const ok = await act(() => api('/api/tasks', 'POST', { title: title.value, brief: brief.value, project: project.value || null, assignee: assignee.value || null, priority: +prio.value, deps }), 'Tâche créée');
+    const ok = await act(() => api('/api/tasks', 'POST', { title: title.value, brief: brief.value, project: project.value || null, assignee: assignee.value || null, priority: +prio.value, deps, ...(audit.checked ? { sandbox: 'read-only', includeDirty: true } : {}) }), 'Tâche créée');
     if (ok) dlg.close();
   } } },
     h('h2', {}, 'Nouvelle tâche'),
@@ -653,6 +655,7 @@ function openNewTask() {
     h('label', { class: 'field' }, h('span', {}, 'Détail'), brief),
     h('div', { class: 'split' }, h('label', { class: 'field' }, h('span', {}, 'Projet'), project), h('label', { class: 'field' }, h('span', {}, 'Priorité'), prio)),
     h('label', { class: 'field' }, h('span', {}, 'Assigner à'), assignee),
+    h('label', { class: 'check' }, audit, 'Audit en lecture seule : ChatGPT lit le projet (y compris les modifications en cours) sans rien modifier'),
     open.length ? h('div', { class: 'field' }, h('span', {}, 'Dépend de'), h('div', { class: 'deps' }, depBoxes)) : null,
     h('div', { class: 'actions', style: 'justify-content:flex-end' }, h('button', { type: 'button', class: 'btn', on: { click: () => dlg.close() } }, 'Annuler'), h('button', { type: 'submit', class: 'btn primary' }, 'Créer la tâche')));
   dlg.replaceChildren(form);

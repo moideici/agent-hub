@@ -44,6 +44,20 @@ test('dispatch: réserve la tâche, lance une seule fois, écrit brief et journa
   assert.equal(calls.length, 1);
 });
 
+test('dispatch: une tâche d’audit part en lecture seule avec les modifications en cours', () => {
+  const t = mk('audit', { sandbox: 'read-only', includeDirty: true });
+  assert.equal(t.sandbox, 'read-only');
+  dispatchTask(t.id, 'a', 'user', { spawner });
+  const args = calls.at(-1);
+  assert.equal(args[args.indexOf('--sandbox') + 1], 'read-only');
+  assert.ok(args.includes('--include-dirty'));
+  assert.throws(() => bus.addTask({ title: 'x', sandbox: 'danger-full-access' }), /sandbox invalide/);
+  const normal = mk('normale');
+  dispatchTask(normal.id, 'b', 'user', { spawner });
+  assert.ok(!calls.at(-1).includes('--sandbox') && !calls.at(-1).includes('--include-dirty'));
+  for (const x of [t, normal]) bus.updateTask(x.id, { status: 'done' }); // libère les places pour la suite
+});
+
 test('dispatch: refuse tant que les dépendances ne sont pas terminées', () => {
   const a = mk('amont');
   const b = mk('aval', { deps: [a.id] });
