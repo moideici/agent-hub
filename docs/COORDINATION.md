@@ -1,5 +1,7 @@
 # Coordination : dashboard, tâches et messages
 
+> Fonctions avancées (file d'attente, correction automatique, question à ChatGPT, résultats, réservations, résumé de démarrage…) : [FONCTIONS-AVANCEES.md](FONCTIONS-AVANCEES.md).
+
 `ah serve` ouvre un dashboard sur `http://127.0.0.1:4317/?t=<jeton>` (jeton dans `~/.agent-hub/server-token`, posé en cookie
 `HttpOnly; SameSite=Strict` au premier chargement). Il montre en direct les sessions Claude, les comptes et runs Codex, les
 tâches partagées et les messages entre agents.
