@@ -104,6 +104,18 @@ Surcharge par projet (optionnel) dans `<repo>/.agent-hub.json` :
 `accounts`, `defaultAccount`, `autoRotate`, `model`, `effort`, `timeoutMin`, `testTimeoutMin`, `windowsSandbox`
 (`auto`|`elevated`|`unelevated`), `useUserConfig`.
 
+## Coordination et dashboard (`ah serve`)
+Un dashboard local montre en direct tes sessions Claude (titre, état, ce qu'elles font), les comptes et runs Codex, des **tâches
+partagées** et des **messages** entre agents ; on y crée des tâches, on écrit aux sessions et on lance Codex d'un clic.
+```bash
+ah serve --open                       # ouvre http://127.0.0.1:4317/?t=<jeton>
+ah task add "titre" --project . --assign codex:a --dep T-001
+ah task next | claim | set T-001 --status review | dispatch T-001 --acct a
+ah msg send "<titre de session>" "texte" · ah msg inbox · ah say "ce que je fais"
+```
+Détails, API et sécurité : [docs/COORDINATION.md](docs/COORDINATION.md). Les sessions reçoivent leurs messages par un hook
+(`ah inbox --hook`, à activer dans `~/.claude/settings.json`) ou en lançant `ah watch` avec l'outil Monitor.
+
 ## Sécurité
 - Sandbox Codex `workspace-write` (écriture limitée au worktree) ; jamais de mode « bypass ».
 - Les worktrees sont jetables ; le dépôt principal n'est modifié que par `ah merge`.
