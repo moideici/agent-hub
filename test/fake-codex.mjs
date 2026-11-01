@@ -56,8 +56,27 @@ if (args.includes('--output-schema')) {
   ev({ type: 'turn.completed', usage: { input_tokens: 1, output_tokens: 1 } });
   process.exit(0);
 }
-fs.writeFileSync(path.join(cwd, 'agent_out.txt'), 'written by fake codex\n');
-const msg = '1) created agent_out.txt 2) nothing to verify 3) nothing uncertain';
+// Événements d'activité (commande + fichier modifié) pour tester la progression en direct
+ev({ type: 'item.started', item: { id: 'i1', type: 'command_execution', command: '"C:\\\\WINDOWS\\\\System32\\\\WindowsPowerShell\\\\v1.0\\\\powershell.exe" -Command "Get-ChildItem -Force"' } });
+ev({ type: 'item.completed', item: { id: 'i1', type: 'command_execution', status: 'completed' } });
+if (mode === 'ask' && !stdin.includes('Previous exchange')) {
+  const q = "J'ai besoin d'une précision.\nQUESTION: Quel format de date faut-il utiliser ?";
+  if (out) fs.writeFileSync(out, q);
+  ev({ type: 'item.completed', item: { type: 'agent_message', text: q } });
+  ev({ type: 'turn.completed', usage: { input_tokens: 1, output_tokens: 1 } });
+  process.exit(0);
+}
+if (mode === 'fix') {
+  // 1er passage : le code est cassé (pas de ok.flag) ; passage de correction (journal d'échec dans le prompt) : réparé
+  if (stdin.includes('Failing output')) fs.writeFileSync(path.join(cwd, 'ok.flag'), 'fixed\n');
+  else if (stdin.includes('automatic correction attempt')) throw new Error('inattendu');
+}
+if (mode === 'neverfix') {
+  /* ne répare jamais : les tests continuent d'échouer */
+}
+fs.writeFileSync(path.join(cwd, 'agent_out.txt'), stdin.includes('Previous exchange') ? 'resumed with the answer\n' : 'written by fake codex\n');
+ev({ type: 'item.started', item: { id: 'i2', type: 'file_change', changes: [{ path: path.join(cwd, 'agent_out.txt'), kind: 'add' }], status: 'in_progress' } });
+const msg = stdin.includes('Failing output') ? 'fixed the failing test' : stdin.includes('Previous exchange') ? 'continued after the answer' : '1) created agent_out.txt 2) nothing to verify 3) nothing uncertain';
 if (out) fs.writeFileSync(out, msg);
 ev({ type: 'item.completed', item: { type: 'agent_message', text: msg } });
 ev({ type: 'turn.completed', usage: { input_tokens: 10, output_tokens: 5 } });

@@ -4,13 +4,15 @@ import { cmdReview } from '../lib/review.mjs';
 import { cmdStatus, cmdShow, cmdMerge, cmdClean } from '../lib/runs.mjs';
 import { cmdAccounts, cmdDoctor, cmdInit } from '../lib/admin.mjs';
 import { cmdTask, cmdMsg, cmdSay, cmdWatch, cmdInboxHook, cmdWhoami, cmdServe } from '../lib/coord-cli.mjs';
+import { cmdQueue, cmdWait, cmdLock, cmdBrief } from '../lib/coord-cmds.mjs';
 
 const HELP = `ah — agent-hub : délègue des tâches de code à Codex (GPT, OAuth ChatGPT) dans des worktrees git isolés.
 
 Usage:
   ah run <brief.md|->   [--acct a|b|auto] [--test "cmd"] [--no-tests] [--title "..."]
                         [--include-dirty] [--sandbox workspace-write|read-only] [--model M] [--effort E]
-                        [--timeout MIN] [--repo DIR] [--json] [--verbose]
+                        [--timeout MIN] [--repo DIR] [--json] [--verbose] [--fix N]
+  ah run --continue <runId> --answer "…"                    reprend un run qui a posé une question
   ah review [runId]     [--base REF] [--focus "..."] [--acct a|b|auto] [--json]   relecture read-only par Codex
   ah status             [--all] [--json]                    liste les runs
   ah show <runId>       [--patch] [--json]
@@ -24,17 +26,26 @@ Coordination (sessions Claude, Codex, utilisateur) :
   ah serve              [--port 4317] [--open]              dashboard web sur localhost (URL avec jeton)
   ah task add "titre"   [--brief texte|fichier|-] [--project DIR] [--assign qui] [--dep T-1,T-2] [--prio 0-3]
   ah task list|show|next|claim|set|dispatch                 tâches partagées (dispatch = lance Codex)
+  ah task queue T-1 [T-2] [--acct a|b|any]                  en file : part toute seule dès qu'une place se libère
+  ah task answer T-1 "réponse"                              répond à la question d'un run Codex
+  ah task result T-1 [--text …] [--data f.json] · results    résultat structuré d'une tâche
+  ah task archive T-1 | archive --done · unarchive · delete --yes
+  ah queue [pump]                                           état de la file d'attente
+  ah wait T-1 [T-2] [--any] [--timeout MIN]                 attend la fin (à lancer en arrière-plan)
+  ah lock [dossier] [--note …] · lock list · unlock         « je travaille sur ce projet » (consultatif)
+  ah brief                                                  résumé pour moi (tâches, réponses attendues, messages)
   ah msg send <à> "texte" [--task T-1] · ah msg inbox [--peek] · ah msg list
   ah say "ce que je fais" [--task T-1]                      statut visible dans le dashboard
   ah watch                                                  flux des messages (avec Monitor : réveille la session)
   ah whoami                                                 identité de l'appelant
   <à> = user · * · codex:a · codex:b · titre ou id d'une session Claude
 
-Codes de sortie de \`run\`: 0 ok · 1 échec · 2 quota atteint · 3 timeout · 10 terminé mais tests en échec
+Codes de sortie de \`run\`: 0 ok · 1 échec · 2 quota atteint · 3 timeout · 4 question posée · 10 terminé mais tests en échec
 Le brief "-" est lu sur stdin.`;
 
 const BOOL = new Set([
   'json', 'help', 'include-dirty', 'no-tests', 'squash', 'force', 'all', 'patch', 'verbose', 'peek', 'hook', 'open',
+  'any', 'done', 'yes', 'archived',
 ]);
 
 function parse(argv) {
@@ -73,6 +84,11 @@ try {
     case 'inbox': if (opts.hook) cmdInboxHook(); else cmdMsg({ ...opts, _: ['inbox'] }); break;
     case 'whoami': cmdWhoami(); break;
     case 'serve': await cmdServe(opts); break;
+    case 'queue': cmdQueue(opts); break;
+    case 'wait': await cmdWait(opts); break;
+    case 'lock': cmdLock(opts); break;
+    case 'unlock': cmdLock(opts, true); break;
+    case 'brief': cmdBrief(opts); break;
     case undefined: case 'help': case '--help': case '-h': console.log(HELP); break;
     default:
       console.error(`commande inconnue: ${cmd}\n`);

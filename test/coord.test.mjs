@@ -174,6 +174,30 @@ test('serveur: les messages pour "user" sont comptés non lus puis marqués lus'
   assert.deepEqual((await (await call('/api/state')).json()).userUnread, []);
 });
 
+test('serveur: archivage, suppression et détail complet d’une tâche', async () => {
+  const mk = async (title) => (await (await call('/api/tasks', { method: 'POST', body: { title } })).json());
+  const a = await mk('à archiver');
+  const b = await mk('à supprimer');
+  await call(`/api/tasks/${a.id}`, { method: 'PATCH', body: { status: 'done', result: { text: 'x'.repeat(2000), data: { ok: true }, by: 'user', at: new Date().toISOString() } } });
+  const st = await (await call('/api/state')).json();
+  const inState = st.tasks.find((t) => t.id === a.id);
+  assert.equal(inState.result.truncated, true); // extrait seulement dans l'état
+  assert.equal(inState.result.text.length, 600);
+  const full = await (await call(`/api/tasks/${a.id}`)).json();
+  assert.equal(full.result.text.length, 2000); // le détail complet reste disponible
+  const arch = await (await call('/api/tasks/archive-done', { method: 'POST', body: {} })).json();
+  assert.ok(arch.archived >= 1);
+  const after = await (await call('/api/state')).json();
+  assert.ok(!after.tasks.some((t) => t.id === a.id) && after.archivedCount >= 1);
+  assert.equal((await call(`/api/tasks/${b.id}`, { method: 'DELETE' })).status, 400); // tâche ouverte : refusée
+  assert.equal((await call(`/api/tasks/${a.id}`, { method: 'DELETE' })).status, 200); // archivée : supprimable
+  assert.equal((await call(`/api/tasks/${a.id}`)).status, 404);
+  // mise en file refusée sans projet (et donc sans lancer quoi que ce soit)
+  const q = await call(`/api/tasks/${b.id}/queue`, { method: 'POST', body: {} });
+  assert.equal(q.status, 400);
+  assert.match((await q.json()).error, /pas de projet/);
+});
+
 test('projets: racine git, regroupements connus et chemins vides', () => {
   const g = path.join(tmp, 'depot-git');
   fs.mkdirSync(path.join(g, 'sous', 'dossier'), { recursive: true });
