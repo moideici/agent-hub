@@ -1,10 +1,7 @@
-<!doctype html>
-<html lang="fr">
-<head>
-<meta charset="utf-8">
-<title>agent-hub</title>
-</head>
-<body>
-<p>Interface en cours de construction.</p>
-</body>
-</html>
+﻿<!doctype html>
+<html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>agent-hub · Dashboard</title><link rel="stylesheet" href="/style.css"><script type="module" src="/app.js"></script></head>
+<body><header><div><h1>agent-hub <small>Poste de coordination</small></h1><span id="connection" role="status">Reconnexion</span></div><div id="counters"></div></header>
+<div id="toast" role="alert" hidden><span></span><button aria-label="Fermer l’erreur">Fermer</button></div>
+<div class="layout"><aside><details open><summary>Agents</summary><label>Filtrer les sessions<input id="filter" type="search" placeholder="Titre, dossier…"></label><h2>Sessions Claude</h2><div id="sessions">Chargement des sessions…</div><h2>ChatGPT / Codex</h2><div id="accounts"></div><h3>Derniers runs</h3><div id="runs">Chargement des runs…</div></details></aside>
+<main><nav aria-label="Vues"><button id="tasks-tab" aria-pressed="true">Tâches</button><button id="messages-tab" aria-pressed="false">Messages</button><button id="new-task" class="primary">Nouvelle tâche</button></nav><section id="tasks-view" aria-label="Tâches"><div id="board">Chargement des tâches…</div></section><section id="messages-view" aria-label="Messages" hidden><div id="messages" role="log" aria-label="Fil des messages"></div><div id="composer"></div></section></main></div>
+<dialog id="detail" aria-label="Détail"><div class="panel-head"><h2 id="detail-title">Détail</h2><button id="close-detail">Fermer</button></div><div id="detail-body"></div></dialog></body></html>
