@@ -3,6 +3,7 @@ import { cmdRun } from '../lib/run.mjs';
 import { cmdReview } from '../lib/review.mjs';
 import { cmdStatus, cmdShow, cmdMerge, cmdClean } from '../lib/runs.mjs';
 import { cmdAccounts, cmdDoctor, cmdInit } from '../lib/admin.mjs';
+import { cmdTask, cmdMsg, cmdSay, cmdWatch, cmdInboxHook, cmdWhoami, cmdServe } from '../lib/coord-cli.mjs';
 
 const HELP = `ah — agent-hub : délègue des tâches de code à Codex (GPT, OAuth ChatGPT) dans des worktrees git isolés.
 
@@ -19,11 +20,21 @@ Usage:
   ah doctor                                                 diagnostic
   ah init                                                   crée .agent-hub.json + AGENTS.md dans le dépôt
 
+Coordination (sessions Claude, Codex, utilisateur) :
+  ah serve              [--port 4317] [--open]              dashboard web sur localhost (URL avec jeton)
+  ah task add "titre"   [--brief texte|fichier|-] [--project DIR] [--assign qui] [--dep T-1,T-2] [--prio 0-3]
+  ah task list|show|next|claim|set|dispatch                 tâches partagées (dispatch = lance Codex)
+  ah msg send <à> "texte" [--task T-1] · ah msg inbox [--peek] · ah msg list
+  ah say "ce que je fais" [--task T-1]                      statut visible dans le dashboard
+  ah watch                                                  flux des messages (avec Monitor : réveille la session)
+  ah whoami                                                 identité de l'appelant
+  <à> = user · * · codex:a · codex:b · titre ou id d'une session Claude
+
 Codes de sortie de \`run\`: 0 ok · 1 échec · 2 quota atteint · 3 timeout · 10 terminé mais tests en échec
 Le brief "-" est lu sur stdin.`;
 
 const BOOL = new Set([
-  'json', 'help', 'include-dirty', 'no-tests', 'squash', 'force', 'all', 'patch', 'verbose',
+  'json', 'help', 'include-dirty', 'no-tests', 'squash', 'force', 'all', 'patch', 'verbose', 'peek', 'hook', 'open',
 ]);
 
 function parse(argv) {
@@ -55,6 +66,13 @@ try {
     case 'accounts': cmdAccounts(opts); break;
     case 'doctor': cmdDoctor(opts); break;
     case 'init': cmdInit(opts); break;
+    case 'task': cmdTask(opts); break;
+    case 'msg': cmdMsg(opts); break;
+    case 'say': cmdSay(opts); break;
+    case 'watch': await cmdWatch(opts); break;
+    case 'inbox': if (opts.hook) cmdInboxHook(); else cmdMsg({ ...opts, _: ['inbox'] }); break;
+    case 'whoami': cmdWhoami(); break;
+    case 'serve': await cmdServe(opts); break;
     case undefined: case 'help': case '--help': case '-h': console.log(HELP); break;
     default:
       console.error(`commande inconnue: ${cmd}\n`);
