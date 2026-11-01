@@ -89,6 +89,20 @@ test('sessions: métadonnées, statut et fin de transcription', () => {
   assert.throws(() => coord.resolveAddress('inconnu-total'), /destinataire inconnu/);
 });
 
+test('runs: un run "running" trop ancien (pid réutilisé) est périmé et ne bloque pas le lancement', async () => {
+  const { listRuns, RUNS_DIR } = await import('../lib/runs.mjs');
+  const mk = (id, startedAt) => {
+    const dir = path.join(RUNS_DIR, 'repo-abc123', id);
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, 'run.json'), JSON.stringify({ id, status: 'running', pid: process.pid, startedAt }));
+  };
+  mk('recent', new Date().toISOString());
+  mk('ancien', new Date(Date.now() - 6 * 3600_000).toISOString());
+  const byId = Object.fromEntries(listRuns().map((r) => [r.id, r.status]));
+  assert.equal(byId.recent, 'running');
+  assert.equal(byId.ancien, 'stale');
+});
+
 const TOKEN = 't'.repeat(40);
 let srv;
 before(async () => {
