@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { spawnSync } from 'node:child_process';
 
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'ah-coord-'));
 process.env.AH_HOME = path.join(tmp, 'hub');
@@ -132,6 +133,9 @@ test('serveur: état, tâches, messages et fil de session', async () => {
   for (const k of ['sessions', 'accounts', 'runs', 'tasks', 'messages']) assert.ok(Array.isArray(st[k]), k);
   const s = st.sessions.find((x) => x.id === `claude:${CLI}`);
   assert.equal(s.title, 'Ma session de test');
+  assert.equal(typeof s.projectKey, 'string'); // chaque élément porte son projet
+  assert.ok(s.projectName);
+  assert.ok(Array.isArray(st.projects) && Array.isArray(st.userUnread));
   assert.equal(s.transcript, undefined); // chemins de fichiers non exposés
   assert.match(s.now, /Bash/);
 
@@ -158,6 +162,29 @@ test('serveur: Codex refusé sans projet, statique servi, traversée de dossiers
   assert.match((await d.json()).error, /pas de projet/);
   assert.match((await call('/')).headers.get('content-type'), /text\/html/);
   assert.equal((await call('/..%2f..%2fpackage.json')).status, 404);
+});
+
+test('serveur: les messages pour "user" sont comptés non lus puis marqués lus', async () => {
+  bus.post({ from: 'codex:a', to: 'user', body: 'terminé' });
+  const st = await (await call('/api/state')).json();
+  assert.ok(st.userUnread.length >= 1);
+  const r = await call('/api/messages/read', { method: 'POST', body: {} });
+  assert.equal(r.status, 200);
+  assert.ok((await r.json()).read >= 1);
+  assert.deepEqual((await (await call('/api/state')).json()).userUnread, []);
+});
+
+test('projets: racine git, regroupements connus et chemins vides', () => {
+  const g = path.join(tmp, 'depot-git');
+  fs.mkdirSync(path.join(g, 'sous', 'dossier'), { recursive: true });
+  assert.equal(spawnSync('git', ['init', '-q', g]).status, 0);
+  const root = coord.projectOf(path.join(g, 'sous', 'dossier'));
+  assert.equal(root.name, 'depot-git'); // un sous-dossier remonte à la racine du dépôt
+  assert.equal(root.key, coord.projectOf(g).key);
+  assert.equal(coord.projectOf('C:\\Users\\x\\OneDrive\\cours\\français\\1-').name, 'Cours');
+  assert.equal(coord.projectOf('C:\\Users\\x\\AppData\\Roaming\\Claude\\scratch-workspaces\\a\\b').name, 'Espaces temporaires');
+  assert.equal(coord.projectOf(null).name, 'Sans projet');
+  assert.equal(coord.projectOf('C:\\dossier\\inexistant').name, 'inexistant');
 });
 
 test('serveur: SSE annonce un changement d’état', async () => {

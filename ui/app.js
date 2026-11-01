@@ -1,122 +1,682 @@
-﻿import {relativeTime, shortPath, columns, groupTasks, sortSessions, agentName, formatDuration, canDispatch} from './lib.js';
-const $ = id => document.getElementById(id);
-const el = (tag, text, cls) => { const node = document.createElement(tag); if (text != null) node.textContent = text; if (cls) node.className = cls; return node; };
-const button = (text, action, cls) => { const b = el('button', text, cls); b.type = 'button'; b.addEventListener('click', action); return b; };
-const label = (text, input) => { const l = el('label', text); l.append(input); return l; };
-const field = (tag = 'input', value = '') => { const n = el(tag); n.value = value; return n; };
-const statuses = {todo:'À faire', claimed:'Prise en charge', running:'En cours', review:'À relire', done:'Terminée', blocked:'Bloquée', failed:'Échec', completed:'Terminé', idle:'Inactive', stale:'Interrompu', limited:'Quota atteint', timeout:'Délai dépassé'};
-let state = {sessions:[], accounts:[], runs:[], tasks:[], messages:[], limits:{}};
-let followMessages = true, messageScroll = 0;
-$('messages').addEventListener('scroll',()=>{if($('messages-view').hidden)return;const n=$('messages');messageScroll=n.scrollTop;followMessages=n.scrollHeight-n.scrollTop-n.clientHeight<60;});
-const name = id => agentName(id, state.sessions, state.accounts);
-const noteText = n => typeof n === 'string' ? n : n?.note || '';
-const clock = t => t && Number.isFinite(new Date(t).getTime()) ? new Date(t).toLocaleString('fr-FR') : '—';
-function error(e) { $('toast').firstElementChild.textContent = e.message || String(e); $('toast').hidden = false; }
-$('toast').lastElementChild.onclick = () => { $('toast').hidden = true; };
+﻿import * as L from './lib.js';
+import { icon } from './icons.js';
+
+/* ───────────── Outils DOM (le texte passe toujours par textContent : jamais de données dans innerHTML) ───────────── */
+const $ = (sel, root = document) => root.querySelector(sel);
+
+function h(tag, props = {}, ...kids) {
+  const el = document.createElement(tag);
+  for (const [k, v] of Object.entries(props || {})) {
+    if (v == null || v === false) continue;
+    if (k === 'class') el.className = v;
+    else if (k === 'on') for (const [ev, fn] of Object.entries(v)) el.addEventListener(ev, fn);
+    else if (k.startsWith('aria-') || k === 'role' || k === 'for' || k === 'style') el.setAttribute(k, v);
+    else el[k] = v;
+  }
+  for (const kid of kids.flat(Infinity)) {
+    if (kid == null || kid === false) continue;
+    el.append(kid.nodeType ? kid : document.createTextNode(String(kid)));
+  }
+  return el;
+}
+
+const store = (key, fallback) => {
+  try {
+    return JSON.parse(localStorage.getItem(key)) ?? fallback;
+  } catch {
+    return fallback;
+  }
+};
+const save = (key, value) => {
+  try {
+    localStorage.setItem(key, JSON.stringify(value));
+  } catch {
+    /* stockage indisponible : l'écran marche quand même */
+  }
+};
+
+/* ───────────── État de l'écran ───────────── */
+const VIEWS = {
+  overview: { label: "Vue d'ensemble", icon: 'overview' },
+  tasks: { label: 'Tâches', icon: 'tasks' },
+  sessions: { label: 'Sessions', icon: 'sessions' },
+  codex: { label: 'ChatGPT', icon: 'codex' },
+  messages: { label: 'Messages', icon: 'messages' },
+};
+
+const S = {
+  state: null,
+  view: 'overview',
+  conn: 'wait',
+  filters: { project: '', assignee: '', text: '', showDone: false, showOld: false },
+  collapsed: store('ah.collapsed', {}),
+  panel: null, // { type: 'task'|'session'|'run', id }
+  drafts: {},
+  seenUnread: new Set(),
+  lastSig: '',
+};
+
+const state = () => S.state || { sessions: [], accounts: [], runs: [], tasks: [], projects: [], messages: [], userUnread: [], limits: {} };
+const name = (id) => L.agentName(id, state());
+
+/* ───────────── API ───────────── */
 async function api(path, method = 'GET', body, raw = false) {
-  const response = await fetch(path, {method, credentials:'same-origin', ...(body !== undefined ? {headers:{'content-type':'application/json'}, body:JSON.stringify(body)} : {})});
-  const text = await response.text();
-  let data; try { data = JSON.parse(text); } catch { data = null; }
-  if (!response.ok) throw new Error(data?.error || text || `Erreur HTTP ${response.status}`);
+  const res = await fetch(path, {
+    method,
+    credentials: 'same-origin',
+    ...(body !== undefined ? { headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) } : {}),
+  });
+  const text = await res.text();
+  let data = null;
+  try {
+    data = JSON.parse(text);
+  } catch {
+    /* réponse texte (diff) */
+  }
+  if (!res.ok) throw new Error(data?.error || text || `Erreur HTTP ${res.status}`);
   return raw ? text : data;
 }
-async function write(path, method, data) { await api(path, method, data); await refresh(); }
-function select(options, value = '') { const s = el('select'); for (const [id,text] of options) { const o = el('option',text); o.value = id; s.append(o); } s.value = value; return s; }
-function agentOptions(all = false) { return [[all ? '*' : '',all ? 'Tous' : 'Aucun'], ['codex:a',name('codex:a')], ['codex:b',name('codex:b')], ...state.sessions.map(s => [s.id,s.title || s.id])]; }
-function syncOptions(s, options) {
-  const key = JSON.stringify(options); if (s.dataset.options === key) return;
-  const previous = s.value; s.replaceChildren(); for (const [id,text] of options) { const o = el('option',text); o.value=id; s.append(o); }
-  if (options.some(([id]) => id === previous)) s.value=previous;
-  s.dataset.options=key;
+
+let toastTimer;
+function toast(message, bad = false) {
+  const t = $('#toast');
+  t.textContent = message;
+  t.className = `toast${bad ? ' bad' : ''}`;
+  t.hidden = false;
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => (t.hidden = true), bad ? 7000 : 3500);
 }
-const hashes = new Map();
-function block(id, data, render) { const key = JSON.stringify(data); if (hashes.get(id) === key) return; hashes.set(id,key); render($(id)); }
-function empty(node, text) { node.append(el('p',text,'empty')); }
-function badge(status) { return el('span', statuses[status] || status || 'Inconnu', `badge ${status || ''}`); }
-function tests(t) { return !t || t.skipped || !t.cmd ? 'Tests non lancés' : t.passed ? 'Tests OK' : 'Tests en échec'; }
-function sessionList() {
-  const query = $('filter').value.toLocaleLowerCase('fr');
-  block('sessions', [state.sessions,query], node => { node.replaceChildren();
-    for (const s of sortSessions(state.sessions).filter(s => `${s.title} ${s.cwd}`.toLocaleLowerCase('fr').includes(query))) {
-      const b = button('', () => openDetail('session',s.id),'card'); b.append(el('strong',s.title || s.id));
-      const meta = el('div',null,'meta'); if(s.status === 'running') meta.append(el('span',null,'dot'));
-      meta.append(document.createTextNode(`${shortPath(s.cwd)} · ${statuses[s.status] || s.status} · ${relativeTime(s.lastActivityAt)}`)); b.append(meta);
-      if(s.now) { const n = el('div',s.now,'truncate'); n.title=s.now; b.append(n); }
-      if(s.note) b.append(el('div',noteText(s.note),'meta prose')); node.append(b);
-    } if(!node.children.length) empty(node,'Aucune session');
-  });
-}
-function render() {
-  $('counters').textContent = `${state.sessions.filter(s=>s.status==='running').length} sessions actives · ${state.runs.filter(r=>r.status==='running').length} runs Codex en cours · ${state.tasks.filter(t=>t.status!=='done').length} tâches ouvertes`;
-  sessionList();
-  block('accounts',state.accounts,node=>{node.replaceChildren(); for(const a of state.accounts){const c=el('div',null,'card'); c.append(el('strong',a.name),el('div',`${a.loggedIn?'Connecté':'Déconnecté'} · ${a.running || 0} runs en cours`,'meta')); if(a.limitedUntil) c.append(el('div',`Quota atteint jusqu’au ${clock(a.limitedUntil)}`,'limited')); if(a.note)c.append(el('div',noteText(a.note),'prose')); node.append(c);} if(!node.children.length)empty(node,'Aucun compte');});
-  block('runs',state.runs,node=>{node.replaceChildren(); for(const r of [...state.runs].sort((a,b)=>new Date(b.startedAt)-new Date(a.startedAt)).slice(0,8)){const b=button('',()=>openDetail('run',r.id),'card');b.append(el('strong',r.title || r.id),badge(r.status),el('div',`${name(`codex:${r.account}`)} · ${formatDuration(r.durationSec ?? (r.status==='running'?(Date.now()-new Date(r.startedAt))/1000:null))}`,'meta'));if(r.changes)b.append(el('div',`+${r.changes.added}/-${r.changes.deleted} · ${r.changes.files} fichiers`,'meta'));b.append(el('div',tests(r.tests),'meta'));node.append(b);}if(!node.children.length)empty(node,'Aucun run');});
-  block('board',[state.tasks,state.sessions,state.accounts],node=>{node.replaceChildren();const groups=groupTasks(state.tasks); for(const c of columns){const col=el('section',null,'column');col.dataset.column=c.id;col.append(el('h2',`${c.label} · ${groups[c.id].length}`));for(const t of groups[c.id]){const b=button('',()=>openDetail('task',t.id),'card');b.append(el('div',`${t.id} · Priorité ${t.priority ?? 0}`,'meta'),el('strong',t.title),el('div',name(t.assignee),'meta'),el('div',shortPath(t.project),'meta')); if(t.deps?.length)b.append(el('div',`Dépendances : ${t.deps.join(', ')}`,'meta')); col.append(b);}if(!groups[c.id].length)empty(col,'Aucune tâche');node.append(col);}});
-  block('messages',[state.messages,state.sessions,state.accounts],node=>{node.replaceChildren();for(const m of [...state.messages].sort((a,b)=>new Date(a.ts)-new Date(b.ts))){const row=el('article',null,`message ${m.kind==='event'?'event':''}`);row.append(el('div',`${name(m.from)} → ${name(m.to)} · ${clock(m.ts)}`,'meta'));if(m.taskId)row.append(button(m.taskId,()=>openDetail('task',m.taskId)));row.append(el('p',m.body,'prose'));node.append(row);}if(!node.children.length)empty(node,'Aucun message');if(!$('messages-view').hidden)node.scrollTop=followMessages?node.scrollHeight:messageScroll;});
-  for(const s of document.querySelectorAll('[data-agent-options]')) syncOptions(s,agentOptions(s.dataset.agentOptions==='all'));
-  for(const s of document.querySelectorAll('[data-task-options]')) syncOptions(s,[['','Aucune tâche liée'],...state.tasks.map(t=>[t.id,`${t.id} · ${t.title}`])]);
-  updatePanel();
-}
-$('filter').oninput=sessionList;
-let messageForm;
-function composer(to) {
-  const form=el('form'); const recipient=select(agentOptions(true),to || '*'); if(to)recipient.disabled=true;else recipient.dataset.agentOptions='all';
-  const body=field('textarea'); body.required=true; body.placeholder='Entrée pour envoyer, Maj+Entrée pour une nouvelle ligne';
-  const task=select([['','Aucune tâche liée'],...state.tasks.map(t=>[t.id,`${t.id} · ${t.title}`])]);task.dataset.taskOptions='true';
-  form.append(label('Destinataire',recipient),label(to?'Écrire à cette session':'Message',body),label('Tâche liée (facultative)',task));const send=el('button','Envoyer','primary');send.type='submit';form.append(send);
-  form.onsubmit=async e=>{e.preventDefault();if(!body.value.trim())return;send.disabled=true;try{await write('/api/messages','POST',{to:to || recipient.value,body:body.value,taskId:task.value || null});body.value='';}catch(e){error(e);}finally{send.disabled=false;}};
-  body.onkeydown=e=>{if(e.key==='Enter'&&!e.shiftKey&&!e.isComposing){e.preventDefault();form.requestSubmit();}};return form;
-}
-messageForm=composer();$('composer').append(messageForm);
-for(const view of ['tasks','messages']) $(`${view}-tab`).onclick=()=>{for(const v of ['tasks','messages']){$(`${v}-view`).hidden=v!==view;$(`${v}-tab`).setAttribute('aria-pressed',String(v===view));}if(view==='messages')$('messages').scrollTop=followMessages?$('messages').scrollHeight:messageScroll;};
-const dialog=$('detail');let panel=null, panelVersion=0, returnFocus=null;
-function closeDetail(){dialog.close();}
-$('close-detail').onclick=closeDetail;
-dialog.addEventListener('click',e=>{if(e.target===dialog){const r=dialog.getBoundingClientRect();if(e.clientX<r.left||e.clientX>r.right||e.clientY<r.top||e.clientY>r.bottom)closeDetail();}});
-dialog.addEventListener('close',()=>{panel=null;panelVersion++;document.body.append($('toast'));returnFocus?.focus();});
-function begin(title){if(!dialog.open)returnFocus=document.activeElement;panelVersion++;$('detail-title').textContent=title;$('detail-body').replaceChildren();dialog.append($('toast'));if(!dialog.open)dialog.showModal();return $('detail-body');}
-function metadata(node, pairs){node.replaceChildren();for(const [key,value] of pairs){node.append(el('dt',key),el('dd',value==null?'—':typeof value==='object'?JSON.stringify(value,null,2):String(value)));}}
-function safeAction(b, action){b.onclick=async()=>{b.disabled=true;try{await action();}catch(e){error(e);}finally{if(b.isConnected)b.disabled=false;}};}
-function openDetail(kind,id){const body=begin(kind==='session'?'Session Claude':kind==='run'?'Run Codex':'Tâche');panel={kind,id};const meta=el('dl');body.append(meta);panel.meta=meta;
-  if(kind==='session'){const transcript=el('div',null,'transcript');body.append(el('h3','Fil récent'),transcript,composer(id));panel.transcript=transcript;}
-  if(kind==='run'){const content=el('div');body.append(content);panel.content=content;}
-  if(kind==='task'){buildTaskPanel(body);}
-  updatePanel();
-}
-function buildTaskPanel(body){
-  const status=select(Object.entries(statuses).filter(([s])=>['todo','claimed','running','review','done','blocked','failed'].includes(s)));
-  const assignee=select(agentOptions());assignee.dataset.agentOptions='single';const save=button('Enregistrer');
-  safeAction(save,async()=>{await write(`/api/tasks/${encodeURIComponent(panel.id)}`,'PATCH',{status:status.value,assignee:assignee.value || null});});
-  const note=field('textarea');const add=button('Ajouter une note');safeAction(add,async()=>{if(!note.value.trim())return;await write(`/api/tasks/${encodeURIComponent(panel.id)}`,'PATCH',{note:note.value});note.value='';});
-  const notes=el('div');const account=select([['a','Compte A'],['b','Compte B']],'a');const launch=button('Lancer sur ChatGPT',null,'primary');const reason=el('p',null,'meta');
-  const run=button('Ouvrir le run associé',()=>{const t=state.tasks.find(t=>t.id===panel.id);if(t?.runId)openDetail('run',t.runId);});
-  body.append(label('Statut',status),label('Assignée à',assignee),save,run,el('h3','Notes'),notes,label('Nouvelle note',note),add,el('h3','Lancement ChatGPT'),label('Compte',account),reason,launch);
-  Object.assign(panel,{status,assignee,notes,account,launch,reason,run}); account.onchange=updateDispatch;
-  launch.onclick=async()=>{const p=panel;const t=state.tasks.find(t=>t.id===p.id);const allowed=canDispatch(t,state,p.account.value);if(!allowed.ok){error(new Error(allowed.raison));return;}if(!window.confirm('Cela consomme du quota ChatGPT. Confirmer le lancement de cette tâche ?'))return;p.busy=true;updateDispatch();try{await write(`/api/tasks/${encodeURIComponent(p.id)}/dispatch`,'POST',{account:p.account.value});}catch(e){error(e);}finally{p.busy=false;if(panel===p)updateDispatch();}};
-}
-function updateDispatch(){if(panel?.kind!=='task')return;const p=panel,t=state.tasks.find(t=>t.id===p.id);for(const o of p.account.options){const a=state.accounts.find(a=>a.id===`codex:${o.value}`);o.disabled=!a||!a.loggedIn||new Date(a.limitedUntil).getTime()>Date.now();}const result=canDispatch(t,state,p.account.value);p.launch.disabled=p.busy||!result.ok;p.reason.textContent=p.busy?'Lancement en cours…':result.raison || 'Une confirmation sera demandée avant de consommer du quota.';}
-function detailKey(p) {
-  if(p.kind==='session') { const {now,...content}=state; return JSON.stringify(content); }
-  return JSON.stringify(state.runs.find(r=>r.id===p.id));
-}
-async function updatePanel(){
-  if(!panel || panel.kind==='new')return;const p=panel,version=panelVersion;
-  if(p.kind==='task'){const t=state.tasks.find(t=>t.id===p.id);if(!t){p.meta.textContent='Tâche introuvable';return;}
-    const key=JSON.stringify(t);if(p.key!==key){p.key=key;const labels={id:'Identifiant',title:'Titre',brief:'Détail',project:'Projet',status:'Statut',assignee:'Assignée à',createdBy:'Créée par',deps:'Dépendances',priority:'Priorité',runId:'Run associé',createdAt:'Création',updatedAt:'Mise à jour'};metadata(p.meta,Object.entries(t).filter(([k])=>k!=='notes').map(([k,v])=>[labels[k] || k,k==='assignee'||k==='createdBy'?name(v):k==='status'?statuses[v] || v:v]));p.notes.replaceChildren();for(const n of t.notes || [])p.notes.append(el('p',`${name(n.by)} · ${clock(n.ts)}\n${n.text}`,'prose'));if(!p.notes.children.length)empty(p.notes,'Aucune note');if(!p.initialized){p.status.value=t.status;p.assignee.value=t.assignee || '';p.initialized=true;}p.run.hidden=!t.runId;}updateDispatch();return;
+
+async function act(fn, okMessage) {
+  try {
+    const r = await fn();
+    if (okMessage) toast(okMessage);
+    await refresh();
+    return r;
+  } catch (e) {
+    toast(e.message, true);
+    return null;
   }
-  const data=p.kind==='session'?state.sessions.find(s=>s.id===p.id):state.runs.find(r=>r.id===p.id);
-  if(p.kind==='session'&&data&&p.metaKey!==JSON.stringify(data)){p.metaKey=JSON.stringify(data);metadata(p.meta,[['Titre',data.title],['Dossier',data.cwd],['Modèle',data.model],['Tours',data.completedTurns],['Statut',statuses[data.status] || data.status],['Lien (copiable)',data.link]]);}
-  const key=detailKey(p);if(p.key===key||p.loading)return;p.key=key;p.loading=true;
-  try{const result=await api(p.kind==='session'?`/api/sessions/${encodeURIComponent(p.id)}/tail?n=60`:`/api/runs/${encodeURIComponent(p.id)}`);if(panel!==p||version!==panelVersion)return;
-    if(p.kind==='session'){const entriesKey=JSON.stringify(result.entries);if(p.entriesKey===entriesKey)return;p.entriesKey=entriesKey;const n=p.transcript;const top=n.scrollTop;const bottom=n.scrollHeight-top-n.clientHeight<60;n.replaceChildren();for(const entry of result.entries || []){const row=el('article',null,'message');row.append(el('strong',`${({user:'Utilisateur',assistant:'Assistant',tool:'Outil'})[entry.role] || entry.role}${entry.name?` · ${entry.name}`:''}`),el('div',clock(entry.ts),'meta'),el('p',entry.text,'prose'));n.append(row);}if(!n.children.length)empty(n,'Aucun échange récent');n.scrollTop=bottom?n.scrollHeight:top;}
-    else{metadata(p.meta,[['Identifiant',result.id],['Titre',result.title],['Statut',statuses[result.status] || result.status],['Compte',result.account],['Durée',formatDuration(result.durationSec)],['Tests',tests(result.tests)],['Résultat des tests',result.tests],['Résumé',result.summary],['Dernier message',result.lastMessage],['Erreurs',result.errors]]);if(!p.content.children.length){const diff=el('pre',null,'diff');diff.hidden=true;const show=button('Voir le diff');safeAction(show,async()=>{const patch=await api(`/api/runs/${encodeURIComponent(p.id)}/diff`,'GET',undefined,true);diff.replaceChildren();for(const line of patch.split('\n'))diff.append(el('span',line,line.startsWith('+')?'added':line.startsWith('-')?'deleted':''));diff.hidden=false;});const copy=button('Copier la commande de fusion');safeAction(copy,async()=>{await navigator.clipboard.writeText(`ah merge ${p.id}`);copy.textContent='Commande copiée';});p.content.append(show,copy,diff);}}
-  }catch(e){p.key=null;error(e);}finally{p.loading=false; if(p.key!==null&&panel===p&&detailKey(p)!==key)updatePanel();}
 }
-$('new-task').onclick=()=>{const body=begin('Nouvelle tâche');panel={kind:'new'};const form=el('form'),title=field(),brief=field('textarea'),project=field(),assignee=select(agentOptions()),priority=select([['0','0'],['1','1'],['2','2'],['3','3']],'0');title.required=true;project.placeholder='Chemin local du dépôt git';assignee.dataset.agentOptions='single';form.append(label('Titre (requis)',title),label('Détail',brief),label('Projet',project),label('Assignée à',assignee),label('Priorité',priority));const deps=el('fieldset');deps.append(el('legend','Dépendances'));for(const t of state.tasks.filter(t=>t.status!=='done')){const c=field();c.type='checkbox';c.value=t.id;const l=label(`${t.id} · ${t.title}`,c);l.className='check';deps.append(l);}if(deps.children.length===1)empty(deps,'Aucune tâche ouverte');form.append(deps);const submit=el('button','Créer la tâche','primary');submit.type='submit';form.append(submit);form.onsubmit=async e=>{e.preventDefault();if(!title.value.trim())return;submit.disabled=true;try{await write('/api/tasks','POST',{title:title.value.trim(),brief:brief.value,project:project.value.trim(),assignee:assignee.value || null,priority:Number(priority.value),deps:[...deps.querySelectorAll('input:checked')].map(c=>c.value)});closeDetail();}catch(e){error(e);}finally{submit.disabled=false;}};body.append(form);};
-let inFlight=false, pending=false, lastLoad=0, reloadTimer, fallback;
-async function refresh(){if(inFlight){pending=true;return;}inFlight=true;lastLoad=Date.now();try{const next=await api('/api/state');state={...state,...next};render();}catch(e){error(e);}finally{inFlight=false;if(pending){pending=false;schedule();}}}
-function schedule(){if(reloadTimer)return;reloadTimer=setTimeout(()=>{reloadTimer=null;refresh();},Math.max(0,400-(Date.now()-lastLoad)));}
-function connection(connected){$('connection').textContent=connected?'Connecté':'Reconnexion · actualisation toutes les 5 s';$('connection').classList.toggle('connected',connected);if(connected){clearInterval(fallback);fallback=null;}else if(!fallback)fallback=setInterval(schedule,5000);}
+
+/* ───────────── Chargement en direct ───────────── */
+let refreshTimer = null;
+let inflight = false;
+let again = false;
+
+function scheduleRefresh(delay = 350) {
+  clearTimeout(refreshTimer);
+  refreshTimer = setTimeout(refresh, delay);
+}
+
+async function refresh() {
+  if (inflight) {
+    again = true;
+    return;
+  }
+  inflight = true;
+  try {
+    S.state = await api('/api/state');
+    setConn('ok');
+    render();
+  } catch (e) {
+    setConn('down');
+    if (!S.state) toast(e.message, true);
+  } finally {
+    inflight = false;
+    if (again) {
+      again = false;
+      scheduleRefresh(0);
+    }
+  }
+}
+
+function setConn(c) {
+  if (S.conn === c) return;
+  S.conn = c;
+  renderRail();
+}
+
+function connect() {
+  if (!('EventSource' in window)) return;
+  const es = new EventSource('/api/events');
+  es.onopen = () => setConn('ok');
+  es.onmessage = () => scheduleRefresh();
+  es.onerror = () => setConn('down');
+}
+
+/* ───────────── Navigation ───────────── */
+function go(view, filters = {}) {
+  if (!VIEWS[view]) view = 'overview';
+  S.view = view;
+  Object.assign(S.filters, { text: '' }, filters);
+  if (location.hash !== `#/${view}`) history.replaceState(null, '', `#/${view}`);
+  S.lastSig = '';
+  buildTopbar();
+  render();
+  $('#view').scrollTop = 0;
+}
+
+function viewFromHash() {
+  const v = location.hash.replace(/^#\/?/, '').split('/')[0];
+  return VIEWS[v] ? v : 'overview';
+}
+
+/* ───────────── Barre latérale ───────────── */
+const themeNext = { auto: 'light', light: 'dark', dark: 'auto' };
+const themeLabel = { auto: 'Thème : auto', light: 'Thème : clair', dark: 'Thème : sombre' };
+
+function applyTheme(t) {
+  if (t === 'auto') document.documentElement.removeAttribute('data-theme');
+  else document.documentElement.dataset.theme = t;
+}
+
+function renderRail() {
+  const st = state();
+  const openTasks = st.tasks.filter(L.isOpen);
+  const review = st.tasks.filter((t) => ['review', 'failed', 'blocked'].includes(t.status)).length;
+  const live = st.sessions.filter((s) => s.status === 'running').length;
+  const runs = st.runs.filter((r) => r.status === 'running').length;
+  const unread = st.userUnread.length;
+  const badges = {
+    overview: L.attentionItems(st).length ? { n: L.attentionItems(st).length, cls: 'hot' } : null,
+    tasks: openTasks.length ? { n: openTasks.length, cls: review ? 'hot' : '' } : null,
+    sessions: live ? { n: live, cls: 'live' } : null,
+    codex: runs ? { n: runs, cls: 'live' } : null,
+    messages: unread ? { n: unread, cls: 'hot' } : null,
+  };
+  const connText = { ok: 'Connecté en direct', down: 'Connexion perdue', wait: 'Connexion…' }[S.conn];
+  const theme = store('ah.theme', 'auto');
+  const rail = $('#rail');
+  rail.replaceChildren(
+    h('div', { class: 'brand' },
+      h('div', { class: 'brand-mark' }, icon('branch', 17)),
+      h('div', {}, h('b', {}, 'agent-hub'), h('small', {}, 'Poste de coordination')),
+    ),
+    ...Object.entries(VIEWS).map(([id, v]) =>
+      h('button', { class: 'nav-item', 'aria-current': S.view === id ? 'page' : null, on: { click: () => go(id) } },
+        icon(v.icon, 19), h('span', { class: 'label' }, v.label),
+        badges[id] ? h('span', { class: `badge ${badges[id].cls}` }, badges[id].n) : null),
+    ),
+    h('div', { class: 'rail-foot' },
+      h('div', { class: 'conn' }, h('span', { class: `dot ${S.conn}` }), connText),
+      h('button', { class: 'theme-btn', on: { click: () => { const n = themeNext[store('ah.theme', 'auto')]; save('ah.theme', n); applyTheme(n); renderRail(); } } }, themeLabel[theme]),
+    ),
+  );
+}
+
+/* ───────────── Barre du haut (construite une fois par vue : les champs gardent leur focus) ───────────── */
+function buildTopbar() {
+  const bar = $('#topbar');
+  const subs = {
+    overview: "Ce qui demande ton attention, ce qui tourne, où en sont les projets",
+    tasks: 'Par projet, puis par état',
+    sessions: 'Tes sessions Claude, par projet',
+    codex: 'Comptes ChatGPT et runs Codex',
+    messages: 'Échanges entre toi, tes sessions et ChatGPT',
+  };
+  const search = h('label', { class: 'search' }, icon('search', 16),
+    h('input', { type: 'search', placeholder: 'Rechercher…', value: S.filters.text, 'aria-label': 'Rechercher', on: { input: (e) => { S.filters.text = e.target.value; renderView(true); } } }));
+  bar.replaceChildren(...[
+    h('div', {}, h('h1', {}, VIEWS[S.view].label), h('div', { class: 'sub' }, subs[S.view])),
+    h('div', { class: 'spacer' }),
+    ['tasks', 'sessions', 'messages'].includes(S.view) ? search : null,
+    h('button', { class: 'btn primary', on: { click: openNewTask } }, icon('plus', 16), 'Nouvelle tâche'),
+  ].filter(Boolean));
+}
+
+/* ───────────── Rendu ───────────── */
+function render() {
+  renderRail();
+  renderView();
+  renderPanel();
+}
+
+function renderView(force = false) {
+  const st = state();
+  const sig = `${S.view}|${JSON.stringify(S.filters)}|${JSON.stringify(S.collapsed)}|${[...S.seenUnread]}|${L.stateSignature(st)}|${Math.floor(Date.now() / 30000)}`;
+  if (!force && sig === S.lastSig) return;
+  S.lastSig = sig;
+  const view = $('#view');
+  const top = view.scrollTop;
+  const builders = { overview: overviewView, tasks: tasksView, sessions: sessionsView, codex: codexView, messages: messagesView };
+  view.replaceChildren(builders[S.view](st));
+  view.scrollTop = top;
+  if (S.view === 'messages') markMessagesRead();
+}
+
+const chip = (status, text) => h('span', { class: `chip s-${status}` }, text ?? L.STATUS_LABEL[status] ?? status);
+const projectChip = (n) => (n ? h('span', { class: 'chip plain' }, icon('folder', 13), n) : null);
+
+function avatar(id, small = false) {
+  const kind = L.agentKind(id);
+  const label = L.agentName(id, state());
+  return h('span', { class: `avatar ${small ? 'sm' : ''} ${kind}`, style: kind === 'claude' ? `--h:${L.hueOf(id)}` : null, title: label }, kind === 'all' ? '*' : L.initials(kind === 'codex' ? label.replace('ChatGPT ', 'G') : label));
+}
+
+const empty = (text, left = false) => h('div', { class: `empty ${left ? 'left' : ''}` }, text);
+const cardHead = (title, count) => h('div', { class: 'card-head' }, h('h2', {}, title), count != null ? h('span', { class: 'count' }, count) : null);
+
+function openTarget(t) {
+  if (!t) return;
+  if (t.view) go(t.view);
+  else openPanel(t.type, t.id);
+}
+
+/* ───── Vue d'ensemble ───── */
+function overviewView(st) {
+  const attention = L.attentionItems(st);
+  const live = L.runningNow(st);
+  const projects = L.projectsOverview(st);
+  const feed = L.activityFeed(st, 14);
+
+  const attentionRow = (a) =>
+    h('button', { class: `row lvl-${a.level}`, on: { click: () => openTarget(a.target) } },
+      h('span', { class: 'rowbar' }),
+      h('span', { class: 'ico-c' }, icon(a.level === 'action' ? 'check' : 'alert', 18)),
+      h('span', { class: 'grow' }, h('div', { class: 'title' }, a.title), h('div', { class: 'detail clip' }, a.detail)),
+      projectChip(a.project),
+      icon('chevron', 16));
+
+  const liveRow = (x) =>
+    h('button', { class: 'row', on: { click: () => openPanel(x.type, x.id) } },
+      h('span', { class: 'dot live' }),
+      h('span', { class: 'grow' },
+        h('div', { class: 'title clip' }, x.title),
+        h('div', { class: 'detail clip' }, x.type === 'run' ? `${name(x.who)} · depuis ${L.relativeTime(x.since).replace('il y a ', '')}` : x.detail || 'En cours')),
+      projectChip(x.project));
+
+  const projectRow = (p) =>
+    h('button', { class: 'row', on: { click: () => go('tasks', { project: p.key || '__none' }) } },
+      h('span', { class: 'grow' },
+        h('div', { class: 'title' }, p.name),
+        p.total ? h('div', { class: 'progress', style: 'margin-top:7px' }, h('i', { style: `width:${Math.round(p.progress * 100)}%` })) : null,
+        h('div', { class: 'stat', style: 'margin-top:6px' },
+          p.total ? `${p.done}/${p.total} terminées` : `${p.sessions} session${p.sessions > 1 ? 's' : ''} · ${L.relativeTime(p.latest)}`,
+          p.review ? chip('review', `${p.review} à traiter`) : null,
+          p.running ? h('span', { class: 'chip s-running' }, `${p.running} actif${p.running > 1 ? 's' : ''}`) : null)),
+      icon('chevron', 16));
+
+  const feedRow = (e) =>
+    h('div', { class: 'row' },
+      avatar(e.who, true),
+      h('span', { class: 'grow' }, h('div', { class: 'clip' }, h('b', {}, name(e.who)), h('span', { class: 'muted' }, e.kind === 'message' && e.to ? ` → ${name(e.to)}` : ''), ' ', e.text.slice(0, 140))),
+      h('span', { class: 'faint', style: 'font-size:12.5px;white-space:nowrap' }, L.relativeTime(e.ts)));
+
+  return h('div', { class: 'grid-overview' },
+    h('section', { class: 'card span-2' }, cardHead('À traiter', attention.length || null),
+      h('div', { class: 'card-body' }, attention.length ? attention.map(attentionRow) : empty('Rien ne demande ton attention pour le moment.', true))),
+    h('section', { class: 'card' }, cardHead('En cours maintenant', live.length || null),
+      h('div', { class: 'card-body' }, live.length ? live.map(liveRow) : empty('Aucune session ni run actif.', true))),
+    h('section', { class: 'card' }, cardHead('Projets', projects.length || null),
+      h('div', { class: 'card-body' }, projects.length ? projects.map(projectRow) : empty('Aucun projet actif.', true))),
+    h('section', { class: 'card span-2' }, cardHead('Activité récente'),
+      h('div', { class: 'card-body' }, feed.length ? feed.map(feedRow) : empty('Rien pour le moment.', true))));
+}
+
+/* ───── Tâches ───── */
+function taskCard(t) {
+  const st = state();
+  const run = t.runId ? st.runs.find((r) => r.id === t.runId) : null;
+  return h('button', { class: 'tcard', on: { click: () => openPanel('task', t.id) } },
+    h('div', { class: 'top' }, h('span', { class: 'mono' }, t.id),
+      t.priority >= 2 ? h('span', { class: `chip prio-${t.priority}` }, L.PRIORITY_LABEL[t.priority]) : null,
+      h('span', { style: 'margin-left:auto' }, L.relativeTime(t.updatedAt))),
+    h('div', { class: 'ttl' }, t.title),
+    h('div', { class: 'foot' },
+      t.assignee ? h('span', { class: 'stat' }, avatar(t.assignee, true), h('span', { class: 'clip', style: 'max-width:120px' }, name(t.assignee))) : h('span', { class: 'faint' }, 'Non assignée'),
+      t.deps?.length ? h('span', { class: 'chip plain' }, `après ${t.deps.join(', ')}`) : null,
+      run ? chip(run.status, run.tests && !run.tests.skipped ? (run.tests.passed ? 'Tests OK' : 'Tests en échec') : null) : null));
+}
+
+function tasksView(st) {
+  const f = S.filters;
+  const projects = [...new Map(st.tasks.map((t) => [t.projectKey || '', t.projectName || 'Sans projet'])).entries()];
+  const assignees = [...new Set(st.tasks.map((t) => t.assignee).filter(Boolean))];
+  const groups = L.groupTasksByProject(st.tasks, f);
+
+  const toolbar = h('div', { class: 'toolbar' },
+    h('select', { class: 'input', 'aria-label': 'Projet', on: { change: (e) => { f.project = e.target.value; renderView(true); } } },
+      h('option', { value: '' }, 'Tous les projets'), projects.map(([k, n]) => h('option', { value: k || '__none', selected: f.project === (k || '__none') }, n))),
+    h('select', { class: 'input', 'aria-label': 'Assigné à', on: { change: (e) => { f.assignee = e.target.value; renderView(true); } } },
+      h('option', { value: '' }, 'Tout le monde'), assignees.map((a) => h('option', { value: a, selected: f.assignee === a }, name(a)))),
+    h('label', { class: 'check' }, h('input', { type: 'checkbox', checked: f.showDone, on: { change: (e) => { f.showDone = e.target.checked; renderView(true); } } }), 'Afficher les terminées'));
+
+  if (!groups.length) {
+    return h('div', {}, toolbar, h('div', { class: 'card' }, empty(st.tasks.length ? 'Aucune tâche ne correspond aux filtres.' : "Aucune tâche pour l'instant. Crée-en une avec « Nouvelle tâche » ou depuis une session (ah task add).")));
+  }
+
+  const laneColor = { todo: 'todo', doing: 'running', review: 'review', blocked: 'failed', done: 'done' };
+  const section = (g) => {
+    const open = !S.collapsed[`task:${g.key}`];
+    const lanes = L.LANES.filter((l) => l.id !== 'done');
+    return h('section', { class: `card project ${open ? 'open' : ''}` },
+      h('button', { class: 'project-head', 'aria-expanded': String(open), on: { click: () => { S.collapsed[`task:${g.key}`] = open; save('ah.collapsed', S.collapsed); renderView(true); } } },
+        h('span', { class: 'chev' }, icon('chevron', 17)),
+        h('div', { class: 'grow' }, h('h2', {}, g.name), g.path ? h('div', { class: 'faint mono clip', style: 'max-width:460px' }, g.path) : null),
+        h('div', { class: 'meta' },
+          g.counts.review ? chip('review', `${g.counts.review} à relire`) : null,
+          g.counts.blocked ? chip('failed', `${g.counts.blocked} bloquée${g.counts.blocked > 1 ? 's' : ''}`) : null,
+          h('span', { class: 'muted' }, `${g.counts.done}/${g.counts.total}`),
+          h('div', { class: 'progress prog' }, h('i', { style: `width:${Math.round(g.progress * 100)}%` })))),
+      open ? h('div', { class: 'lanes' }, lanes.map((l) =>
+        h('div', { class: 'lane' },
+          h('h3', {}, h('span', { class: `dot s-${laneColor[l.id]}` }), l.label, h('span', { class: 'n' }, g.counts[l.id])),
+          g.lanes[l.id].length ? g.lanes[l.id].map(taskCard) : h('div', { class: 'none' }, '—')))) : null,
+      open && f.showDone && g.lanes.done.length
+        ? h('div', { class: 'done-line' }, h('div', { class: 'lane' }, h('h3', {}, h('span', { class: 'dot s-done' }), 'Terminées', h('span', { class: 'n' }, g.counts.done)), g.lanes.done.map(taskCard)))
+        : open && g.counts.done ? h('div', { class: 'done-line muted' }, `${g.counts.done} terminée${g.counts.done > 1 ? 's' : ''} masquée${g.counts.done > 1 ? 's' : ''}.`) : null);
+  };
+  return h('div', {}, toolbar, groups.map(section));
+}
+
+/* ───── Sessions ───── */
+function sessionsView(st) {
+  const f = S.filters;
+  const { groups, hiddenOld } = L.groupSessions(st.sessions, { text: f.text, showOld: f.showOld });
+  const toolbar = h('div', { class: 'toolbar' },
+    h('label', { class: 'check' }, h('input', { type: 'checkbox', checked: f.showOld, on: { change: (e) => { f.showOld = e.target.checked; renderView(true); } } }),
+      `Afficher les sessions anciennes (plus de 7 jours)${hiddenOld ? ` : ${hiddenOld} masquée${hiddenOld > 1 ? 's' : ''}` : ''}`));
+  if (!groups.length) return h('div', {}, toolbar, h('div', { class: 'card' }, empty('Aucune session à afficher.')));
+  return h('div', {}, toolbar, groups.map((g) =>
+    h('section', { class: 'group' },
+      h('div', { class: 'group-head' }, icon('folder', 16), h('h2', {}, g.name), h('span', { class: 'faint' }, `${g.sessions.length} session${g.sessions.length > 1 ? 's' : ''}`), g.running ? h('span', { class: 'chip s-running' }, `${g.running} active${g.running > 1 ? 's' : ''}`) : null),
+      h('div', { class: 'card' }, g.sessions.map((s) =>
+        h('button', { class: 'session', on: { click: () => openPanel('session', s.id) } },
+          h('span', { class: `dot ${s.status === 'running' ? 'live' : ''}` }),
+          h('span', { class: 'grow' }, h('div', { class: 'title clip' }, s.title),
+            s.note?.note ? h('div', { class: 'now clip' }, `Statut : ${s.note.note}`) : s.now ? h('div', { class: 'now clip' }, s.now) : null),
+          h('span', { class: 'when' }, s.status === 'running' ? 'En cours' : L.relativeTime(s.lastActivityAt))))))));
+}
+
+/* ───── ChatGPT / Codex ───── */
+function codexView(st) {
+  const accounts = h('div', { class: 'accounts' }, st.accounts.map((a) => {
+    const limited = a.limitedUntil && Date.parse(a.limitedUntil) > Date.now();
+    return h('div', { class: 'card account' },
+      h('div', { class: 'name' }, avatar(a.id), `Compte ${a.name}`, a.isDefault ? h('span', { class: 'chip plain' }, 'par défaut') : null),
+      h('div', { class: 'stat' },
+        a.loggedIn ? chip('done', 'Connecté') : chip('failed', 'Non connecté'),
+        limited ? chip('limited', `Quota atteint · reprise vers ${L.clockTime(a.limitedUntil)}`) : a.loggedIn ? h('span', {}, 'Quota disponible') : null),
+      h('div', { class: 'stat' }, a.running ? h('span', { class: 'chip s-running' }, `${a.running} run${a.running > 1 ? 's' : ''} en cours`) : h('span', {}, 'Aucun run en cours')),
+      a.note?.note ? h('div', { class: 'muted' }, a.note.note) : null);
+  }));
+  const byProject = new Map();
+  for (const r of st.runs.slice(0, 30)) {
+    const k = r.projectKey || '';
+    if (!byProject.has(k)) byProject.set(k, { name: r.projectName || 'Sans projet', runs: [] });
+    byProject.get(k).runs.push(r);
+  }
+  const runRow = (r) =>
+    h('button', { class: 'run', on: { click: () => openPanel('run', r.id) } },
+      chip(r.status),
+      h('span', { class: 'grow' }, h('div', { class: 'title clip' }, r.title),
+        h('div', { class: 'stat' }, `Compte ${r.account || '?'}`, r.durationSec != null ? L.formatDuration(r.durationSec) : null,
+          r.changes ? `${r.changes.files} fichier${r.changes.files > 1 ? 's' : ''} +${r.changes.added}/−${r.changes.deleted}` : null,
+          r.tests && !r.tests.skipped ? chip(r.tests.passed ? 'done' : 'failed', r.tests.passed ? 'Tests OK' : 'Tests en échec') : null)),
+      h('span', { class: 'faint', style: 'font-size:12.5px;white-space:nowrap' }, L.relativeTime(r.startedAt)));
+  return h('div', {}, accounts,
+    byProject.size ? [...byProject.values()].map((g) =>
+      h('section', { class: 'group' }, h('div', { class: 'group-head' }, icon('folder', 16), h('h2', {}, g.name), h('span', { class: 'faint' }, `${g.runs.length} run${g.runs.length > 1 ? 's' : ''}`)),
+        h('div', { class: 'card' }, g.runs.map(runRow)))) : h('div', { class: 'card' }, empty('Aucun run Codex pour le moment.')));
+}
+
+/* ───── Messages ───── */
+function messagesView(st) {
+  const q = S.filters.text.trim().toLowerCase();
+  const msgs = st.messages.filter((m) => !q || `${m.body} ${name(m.from)} ${name(m.to)} ${m.taskId || ''}`.toLowerCase().includes(q));
+  const row = (m) =>
+    h('div', { class: `msg ${m.kind === 'event' ? 'event' : ''} ${st.userUnread.includes(m.id) || S.seenUnread.has(m.id) ? 'unread' : ''}` },
+      avatar(m.from),
+      h('div', {}, h('div', { class: 'who' }, h('b', {}, name(m.from)), h('span', { class: 'muted' }, `→ ${name(m.to)}`),
+        m.taskId ? h('button', { class: 'chip plain', on: { click: () => openPanel('task', m.taskId) } }, m.taskId) : null,
+        h('span', { class: 'faint', style: 'font-size:12.5px' }, L.relativeTime(m.ts))),
+        h('div', { class: 'body' }, m.body)));
+
+  const to = h('select', { class: 'input', 'aria-label': 'Destinataire', style: 'width:210px' },
+    [['*', 'Tout le monde'], ['codex:a', 'ChatGPT a'], ['codex:b', 'ChatGPT b'], ...st.sessions.filter((s) => s.status === 'running' || Date.now() - Date.parse(s.lastActivityAt || 0) < 7 * 864e5).map((s) => [s.id, s.title])]
+      .map(([v, t]) => h('option', { value: v }, t)));
+  const text = h('textarea', { class: 'input', rows: 1, placeholder: 'Écrire un message… (Entrée pour envoyer, Maj+Entrée pour un retour à la ligne)', 'aria-label': 'Message', value: S.drafts.msg || '' });
+  text.addEventListener('input', () => (S.drafts.msg = text.value));
+  const send = async () => {
+    const body = text.value.trim();
+    if (!body) return;
+    const ok = await act(() => api('/api/messages', 'POST', { to: to.value, body }));
+    if (ok) {
+      S.drafts.msg = '';
+      text.value = '';
+    }
+  };
+  text.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      send();
+    }
+  });
+  return h('div', {},
+    h('div', { class: 'card' }, h('div', { class: 'thread' }, msgs.length ? msgs.map(row) : empty('Aucun message.'))),
+    h('div', { class: 'composer' }, to, text, h('button', { class: 'btn primary', on: { click: send } }, icon('send', 16), 'Envoyer')));
+}
+
+let markTimer;
+function markMessagesRead() {
+  const ids = state().userUnread;
+  if (!ids.length) return;
+  ids.forEach((i) => S.seenUnread.add(i));
+  clearTimeout(markTimer);
+  markTimer = setTimeout(() => api('/api/messages/read', 'POST', {}).then(() => scheduleRefresh(0)).catch(() => {}), 1500);
+}
+
+/* ───────────── Volet de détail ───────────── */
+function openPanel(type, id) {
+  S.panel = { type, id };
+  S.panelSig = '';
+  renderPanel();
+}
+
+function closePanel() {
+  S.panel = null;
+  renderPanel();
+}
+
+function draft(key, el) {
+  el.value = S.drafts[key] || '';
+  el.addEventListener('input', () => (S.drafts[key] = el.value));
+  return el;
+}
+
+const kv = (rows) => h('dl', { class: 'kv' }, rows.filter(Boolean).flatMap(([k, v]) => [h('dt', {}, k), h('dd', {}, v)]));
+const section = (title, ...kids) => h('section', {}, h('h3', {}, title), ...kids);
+const copyBtn = (text, label) => h('button', { class: 'btn sm', on: { click: () => navigator.clipboard?.writeText(text).then(() => toast('Copié'), () => toast(text)) } }, icon('copy', 14), label);
+
+let panelRequest = 0;
+async function renderPanel() {
+  const panel = $('#panel');
+  const scrim = $('#scrim');
+  if (!S.panel) {
+    panel.hidden = scrim.hidden = true;
+    return;
+  }
+  const { type, id } = S.panel;
+  const st = state();
+  const item = type === 'task' ? st.tasks.find((t) => t.id === id) : type === 'session' ? st.sessions.find((s) => s.id === id) : st.runs.find((r) => r.id === id);
+  if (!item) {
+    panel.hidden = scrim.hidden = true;
+    S.panel = null;
+    return;
+  }
+  const sig = `${type}:${id}:${JSON.stringify(item)}:${type === 'task' ? JSON.stringify(st.accounts) + JSON.stringify(st.tasks.map((t) => [t.id, t.status])) : ''}`;
+  if (sig === S.panelSig && !panel.hidden) return;
+  S.panelSig = sig;
+  const req = ++panelRequest;
+  let extra = null;
+  try {
+    if (type === 'session') extra = await api(`/api/sessions/${encodeURIComponent(id)}/tail?n=60`);
+    if (type === 'run') extra = await api(`/api/runs/${encodeURIComponent(id)}`);
+  } catch (e) {
+    extra = { error: e.message };
+  }
+  if (req !== panelRequest || !S.panel) return;
+  const builders = { task: taskPanel, session: sessionPanel, run: runPanel };
+  const { title, subtitle, body } = builders[type](item, extra);
+  panel.replaceChildren(
+    h('div', { class: 'panel-head' },
+      h('div', { class: 'grow', style: 'flex:1;min-width:0' }, h('h2', {}, title), subtitle ? h('div', { class: 'muted', style: 'margin-top:4px' }, subtitle) : null),
+      h('button', { class: 'btn ghost sm', 'aria-label': 'Fermer', on: { click: closePanel } }, icon('close', 18))),
+    h('div', { class: 'panel-body' }, body));
+  panel.hidden = scrim.hidden = false;
+}
+
+function taskPanel(t) {
+  const st = state();
+  const run = t.runId ? st.runs.find((r) => r.id === t.runId) : null;
+  const can = L.canDispatch(t, st);
+  let account = can.accounts.find((a) => !a.disabled)?.name || '';
+  const confirmBox = h('div', { hidden: true });
+  const accountPick = h('div', { class: 'actions' }, can.accounts.map((a) =>
+    h('label', { class: 'check', title: a.reason || '' }, h('input', { type: 'radio', name: 'acct', value: a.name, disabled: a.disabled, checked: a.name === account, on: { change: () => (account = a.name) } }),
+      `Compte ${a.name}${a.reason ? ` (${a.reason})` : ''}`)));
+  const launch = h('button', { class: 'btn primary', disabled: !can.ok, on: { click: () => {
+    confirmBox.hidden = false;
+    confirmBox.replaceChildren(h('div', { class: 'confirm' },
+      h('div', {}, `Lancer « ${t.title} » sur ChatGPT (compte ${account}) ? Cela consomme du quota ChatGPT.`),
+      h('div', { class: 'actions' },
+        h('button', { class: 'btn primary sm', on: { click: () => act(() => api(`/api/tasks/${encodeURIComponent(t.id)}/dispatch`, 'POST', { account }), `${t.id} lancée sur ChatGPT ${account}`) } }, 'Oui, lancer'),
+        h('button', { class: 'btn sm', on: { click: () => (confirmBox.hidden = true) } }, 'Annuler'))));
+  } } }, icon('play', 15), 'Lancer sur ChatGPT');
+
+  const note = draft(`note:${t.id}`, h('textarea', { class: 'input', rows: 2, placeholder: 'Ajouter une note…', 'aria-label': 'Note' }));
+  const assignee = h('select', { class: 'input', 'aria-label': 'Assigner à', on: { change: (e) => act(() => api(`/api/tasks/${encodeURIComponent(t.id)}`, 'PATCH', { assignee: e.target.value || null })) } },
+    h('option', { value: '' }, 'Non assignée'),
+    [{ id: 'codex:a' }, { id: 'codex:b' }, ...st.sessions.filter((s) => s.status === 'running' || s.id === t.assignee)].map((a) => h('option', { value: a.id, selected: a.id === t.assignee }, name(a.id))));
+
+  return {
+    title: t.title,
+    subtitle: h('span', { class: 'stat' }, h('span', { class: 'mono' }, t.id), chip(t.status), projectChip(t.projectName)),
+    body: [
+      t.brief ? section('Détail', h('div', { class: 'pre' }, t.brief)) : null,
+      section('Informations', kv([
+        ['Assignée à', t.assignee ? h('span', { class: 'stat' }, avatar(t.assignee, true), name(t.assignee)) : 'Personne'],
+        ['Priorité', L.PRIORITY_LABEL[t.priority]],
+        t.deps?.length ? ['Dépend de', t.deps.join(', ')] : null,
+        t.project ? ['Dossier', h('span', { class: 'mono' }, t.project)] : null,
+        ['Créée par', name(t.createdBy)],
+        ['Mise à jour', L.relativeTime(t.updatedAt)],
+        run ? ['Run', h('button', { class: 'chip plain', on: { click: () => openPanel('run', run.id) } }, `${run.id.slice(0, 24)} · ${L.STATUS_LABEL[run.status] || run.status}`)] : null,
+      ])),
+      section('Actions',
+        h('div', { class: 'actions' }, L.nextStatuses(t.status).map((s) =>
+          h('button', { class: `btn sm ${s === 'done' ? 'primary' : ''}`, on: { click: () => act(() => api(`/api/tasks/${encodeURIComponent(t.id)}`, 'PATCH', { status: s }), `${t.id} : ${(L.STATUS_LABEL[s] || s).toLowerCase()}`) } },
+            { done: 'Marquer terminée', todo: t.status === 'done' ? 'Rouvrir' : 'Remettre à faire', blocked: 'Marquer bloquée' }[s] || s))),
+        h('div', { style: 'margin-top:12px' }, h('label', { class: 'field' }, h('span', {}, 'Assigner à'), assignee))),
+      section('Confier à ChatGPT', accountPick, h('div', { class: 'actions', style: 'margin-top:10px' }, launch, can.ok ? null : h('span', { class: 'muted' }, can.reason)), confirmBox),
+      section('Notes', t.notes?.length ? h('div', { class: 'notes' }, [...t.notes].reverse().map((n) => h('div', { class: 'note' }, h('small', {}, `${name(n.by)} · ${L.relativeTime(n.ts)}`), n.text))) : empty('Aucune note.', true),
+        h('div', { style: 'margin-top:10px;display:grid;gap:8px' }, note,
+          h('div', { class: 'actions' }, h('button', { class: 'btn sm', on: { click: async () => { const v = note.value.trim(); if (!v) return; if (await act(() => api(`/api/tasks/${encodeURIComponent(t.id)}`, 'PATCH', { note: v }))) S.drafts[`note:${t.id}`] = ''; } } }, 'Ajouter la note')))),
+    ],
+  };
+}
+
+function sessionPanel(s, extra) {
+  const entries = extra?.entries || [];
+  const msg = draft(`to:${s.id}`, h('textarea', { class: 'input', rows: 3, placeholder: 'Écrire à cette session…', 'aria-label': 'Message pour la session' }));
+  return {
+    title: s.title,
+    subtitle: h('span', { class: 'stat' }, h('span', { class: `dot ${s.status === 'running' ? 'live' : ''}` }), s.status === 'running' ? 'En cours' : `Inactive · ${L.relativeTime(s.lastActivityAt)}`, projectChip(s.projectName)),
+    body: [
+      section('Informations', kv([['Dossier', h('span', { class: 'mono' }, s.cwd || '—')], ['Modèle', s.model || '—'], ['Tours', s.completedTurns ?? '—'], s.note?.note ? ['Statut annoncé', s.note.note] : null,
+        s.link ? ['Lien', h('span', { class: 'actions' }, h('span', { class: 'mono clip', style: 'max-width:300px' }, s.link), copyBtn(s.link, 'Copier'))] : null])),
+      section('Écrire à cette session',
+        h('div', { style: 'display:grid;gap:8px' }, msg,
+          h('div', { class: 'actions' }, h('button', { class: 'btn primary sm', on: { click: async () => { const v = msg.value.trim(); if (!v) return; if (await act(() => api('/api/messages', 'POST', { to: s.id, body: v }), 'Message envoyé : la session le lira à son prochain tour')) { S.drafts[`to:${s.id}`] = ''; msg.value = ''; } } } }, icon('send', 14), 'Envoyer'),
+            h('span', { class: 'faint' }, 'Lu à son prochain tour (hook) ou tout de suite si elle écoute (ah watch).')))),
+      section('Fil récent', extra?.error ? empty(extra.error, true) : entries.length ? h('div', { class: 'tail' }, entries.map((e) =>
+        h('div', { class: `e ${e.role}` }, h('small', {}, `${{ user: 'Toi', assistant: 'Claude', tool: `Outil · ${e.name}` }[e.role]} · ${L.relativeTime(e.ts)}`), e.text))) : empty('Pas de fil disponible.', true)),
+    ],
+  };
+}
+
+function runPanel(r, extra) {
+  const full = extra && !extra.error ? extra : null;
+  const diffBox = h('div', { hidden: true });
+  const diffBtn = h('button', { class: 'btn sm', on: { click: async () => {
+    diffBtn.disabled = true;
+    try {
+      const text = await api(`/api/runs/${encodeURIComponent(r.id)}/diff`, 'GET', undefined, true);
+      diffBox.hidden = false;
+      diffBox.replaceChildren(h('div', { class: 'pre diff mono' }, text.split('\n').map((l) => h('div', { class: l.startsWith('+') && !l.startsWith('+++') ? 'add' : l.startsWith('-') && !l.startsWith('---') ? 'del' : l.startsWith('@@') ? 'hunk' : '' }, l || ' '))));
+    } catch (e) {
+      toast(e.message, true);
+    }
+    diffBtn.disabled = false;
+  } } }, 'Voir le diff');
+  return {
+    title: r.title,
+    subtitle: h('span', { class: 'stat' }, chip(r.status), `Compte ${r.account || '?'}`, projectChip(r.projectName)),
+    body: [
+      section('Informations', kv([
+        ['Démarré', L.relativeTime(r.startedAt)], r.durationSec != null ? ['Durée', L.formatDuration(r.durationSec)] : null,
+        r.changes ? ['Changements', `${r.changes.files} fichier(s), +${r.changes.added} / −${r.changes.deleted}`] : null,
+        r.tests?.cmd ? ['Tests', `${r.tests.cmd} → ${r.tests.skipped ? 'non lancés' : r.tests.passed ? 'OK' : `ÉCHEC (code ${r.tests.exit})`}`] : null,
+        r.branch ? ['Branche', h('span', { class: 'mono' }, r.branch)] : null, r.taskId ? ['Tâche', h('button', { class: 'chip plain', on: { click: () => openPanel('task', r.taskId) } }, r.taskId)] : null])),
+      r.status === 'completed' && !r.cleaned ? section('Suite', h('div', { class: 'actions' }, copyBtn(`ah merge ${r.id}`, 'Copier la commande de fusion'), copyBtn(`ah show ${r.id} --patch`, 'Copier : voir le diff'))) : null,
+      full?.errors?.length ? section('Erreurs', h('div', { class: 'pre' }, full.errors.join('\n'))) : null,
+      full?.tests?.tail ? section('Sortie des tests', h('div', { class: 'pre mono' }, full.tests.tail)) : null,
+      section('Résumé de l’agent', h('div', { class: 'pre' }, full?.lastMessage || r.summary || 'Pas de résumé.')),
+      r.changes?.files ? section('Diff', h('div', {}, diffBtn), diffBox) : null,
+    ],
+  };
+}
+
+/* ───────────── Nouvelle tâche ───────────── */
+function openNewTask() {
+  const st = state();
+  const dlg = $('#newtask');
+  const title = h('input', { class: 'input', required: true, placeholder: 'Ex. Ajouter le jeu du morpion', 'aria-label': 'Titre' });
+  const brief = h('textarea', { class: 'input', rows: 4, placeholder: 'Objectif, contexte, critères de réussite…', 'aria-label': 'Détail' });
+  const known = st.projects.filter((p) => !/\\temp\\|\/tmp\//i.test(p.path));
+  const preselect = S.filters.project && S.filters.project !== '__none' && known.find((p) => p.key === S.filters.project)?.path;
+  const project = h('select', { class: 'input', 'aria-label': 'Projet' }, h('option', { value: '' }, 'Aucun projet'), known.map((p) => h('option', { value: p.path, selected: p.path === preselect }, `${p.name}`)));
+  const assignee = h('select', { class: 'input', 'aria-label': 'Assigner à' }, h('option', { value: '' }, 'Personne pour l’instant'),
+    ['codex:a', 'codex:b'].map((a) => h('option', { value: a }, name(a))), st.sessions.filter((s) => s.status === 'running').map((s) => h('option', { value: s.id }, s.title)));
+  const prio = h('select', { class: 'input', 'aria-label': 'Priorité' }, L.PRIORITY_LABEL.map((l, i) => h('option', { value: i, selected: i === 1 }, l)));
+  const open = st.tasks.filter(L.isOpen);
+  const depBoxes = open.map((t) => h('label', { class: 'check' }, h('input', { type: 'checkbox', value: t.id }), h('span', { class: 'clip' }, `${t.id} · ${t.title}`)));
+  const form = h('form', { method: 'dialog', on: { submit: async (e) => {
+    e.preventDefault();
+    const deps = depBoxes.map((l) => l.firstChild).filter((c) => c.checked).map((c) => c.value);
+    const ok = await act(() => api('/api/tasks', 'POST', { title: title.value, brief: brief.value, project: project.value || null, assignee: assignee.value || null, priority: +prio.value, deps }), 'Tâche créée');
+    if (ok) dlg.close();
+  } } },
+    h('h2', {}, 'Nouvelle tâche'),
+    h('label', { class: 'field' }, h('span', {}, 'Titre'), title),
+    h('label', { class: 'field' }, h('span', {}, 'Détail'), brief),
+    h('div', { class: 'split' }, h('label', { class: 'field' }, h('span', {}, 'Projet'), project), h('label', { class: 'field' }, h('span', {}, 'Priorité'), prio)),
+    h('label', { class: 'field' }, h('span', {}, 'Assigner à'), assignee),
+    open.length ? h('div', { class: 'field' }, h('span', {}, 'Dépend de'), h('div', { class: 'deps' }, depBoxes)) : null,
+    h('div', { class: 'actions', style: 'justify-content:flex-end' }, h('button', { type: 'button', class: 'btn', on: { click: () => dlg.close() } }, 'Annuler'), h('button', { type: 'submit', class: 'btn primary' }, 'Créer la tâche')));
+  dlg.replaceChildren(form);
+  dlg.showModal();
+  title.focus();
+}
+
+/* ───────────── Démarrage ───────────── */
+applyTheme(store('ah.theme', 'auto'));
+$('#scrim').addEventListener('click', closePanel);
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && S.panel && !$('#newtask').open) closePanel();
+});
+window.addEventListener('hashchange', () => {
+  const v = viewFromHash();
+  if (v !== S.view) go(v);
+});
+setInterval(() => {
+  if (!document.hidden) scheduleRefresh(0);
+}, 8000);
+
+S.view = viewFromHash();
+buildTopbar();
+renderRail();
+$('#view').replaceChildren(h('div', { class: 'card' }, empty('Chargement…')));
 refresh();
-if(typeof EventSource!=='undefined'){const events=new EventSource('/api/events');events.onopen=()=>connection(true);events.onmessage=schedule;events.onerror=()=>connection(false);}else connection(false);
-if(matchMedia('(max-width: 680px)').matches)document.querySelector('aside details').open=false;
+connect();

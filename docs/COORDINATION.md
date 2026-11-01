@@ -42,6 +42,7 @@ Un message de `user` est une consigne de l'utilisateur ; celui d'un autre agent 
 | `GET/POST /api/tasks` · `PATCH /api/tasks/<id>` | lister · créer `{title,brief,project,assignee,deps[],priority}` · modifier `{status,assignee,note,…}` |
 | `POST /api/tasks/<id>/dispatch` `{account:"a"\|"b"}` | lance Codex sur la tâche |
 | `POST /api/messages` `{to, body, taskId?}` | message de `user` |
+| `POST /api/messages/read` | marque comme lus les messages adressés à `user` (`userUnread` se vide) |
 
 `/api/state` :
 ```
@@ -53,6 +54,16 @@ Un message de `user` est une consigne de l'utilisateur ; celui d'un autre agent 
   tasks:[…voir plus haut…], messages:[…150 derniers…] }
 ```
 `session.note` / `account.note` = `{note, taskId, ts}` publié par `ah say`.
+
+Regroupement par projet : chaque session, tâche et run porte `projectKey` et `projectName`. Le projet est la racine git du dossier ;
+à défaut, les espaces temporaires de Claude forment « Espaces temporaires », `OneDrive/cours` forme « Cours », sinon le dossier lui-même.
+L'état contient aussi `projects` (dossiers de dépôts connus, pour le formulaire de création) et `userUnread` (identifiants des messages
+non lus adressés à `user`).
+
+## Interface (`ui/`)
+Cinq vues : vue d'ensemble (à traiter, en cours, projets, activité), tâches (par projet puis par état), sessions (par projet, les sessions
+inactives depuis plus de 7 jours sont masquées), ChatGPT (comptes, quota, runs par projet) et messages. Les fonctions de regroupement sont
+pures et testées (`ui/lib.js`, `test/ui-lib.test.mjs`). Thème automatique clair/sombre avec bascule ; barre d'onglets sur téléphone.
 
 ## Sécurité
 Écoute sur `127.0.0.1` seulement ; hôte vérifié (anti DNS-rebinding), jeton obligatoire, écritures refusées si l'origine diffère (anti CSRF) ;
