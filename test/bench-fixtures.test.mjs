@@ -21,8 +21,11 @@ function copyTree(src, dst) {
   }
 }
 
+// NODE_TEST_CONTEXT est posé par le `node --test` parent : hérité, il fait réussir à tort le `node --test` imbriqué.
+const cleanEnv = () => Object.fromEntries(Object.entries(process.env).filter(([k]) => k !== 'NODE_TEST_CONTEXT'));
+
 const runTests = (cwd) => {
-  const r = spawnSync(process.execPath, ['--test', '--test-reporter=tap'], { cwd, encoding: 'utf8', timeout: 60_000, windowsHide: true });
+  const r = spawnSync(process.execPath, ['--test', '--test-reporter=tap'], { cwd, env: cleanEnv(), encoding: 'utf8', timeout: 60_000, windowsHide: true });
   return { code: r.status, out: `${r.stdout}\n${r.stderr}` };
 };
 
