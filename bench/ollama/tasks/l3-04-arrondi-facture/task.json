@@ -1,0 +1,10 @@
+{
+  "id": "l3-04-arrondi-facture",
+  "level": 3,
+  "title": "Rendre les totaux de facture cohérents",
+  "skills": [
+    "lecture",
+    "bug",
+    "arrondi"
+  ]
+}
