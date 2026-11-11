@@ -1,0 +1,1 @@
+{ "id": "l6-03-ordonnanceur", "level": 6, "title": "Ordonnanceur concurrent avec reprises et annulation", "skills": ["promesses", "concurrence", "annulation", "machine à états"] }
