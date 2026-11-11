@@ -1,0 +1,9 @@
+{
+  "id": "l2-02-csv",
+  "level": 2,
+  "title": "Lire un enregistrement CSV",
+  "skills": [
+    "parsing",
+    "automate"
+  ]
+}

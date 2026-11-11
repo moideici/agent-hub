@@ -1,0 +1,10 @@
+{
+  "id": "l2-03-retour-ligne",
+  "level": 2,
+  "title": "Replier un texte en lignes",
+  "skills": [
+    "chaine",
+    "validation",
+    "bornes"
+  ]
+}
