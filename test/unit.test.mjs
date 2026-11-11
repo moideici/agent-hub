@@ -130,6 +130,18 @@ for (const { name, message, now, expected } of [
     now: new Date(2026, 0, 15, 19, 58),
     expected: new Date(2026, 0, 16, 19, 58),
   },
+  {
+    name: 'a weekly/monthly limit gives a full date (month, day with suffix, year)',
+    message: 'You’ve hit your usage limit. Upgrade to Plus to continue using Codex, or try again at Dec 4th, 2026 2:48 PM.',
+    now: new Date(2026, 10, 11, 10, 0),
+    expected: new Date(2026, 11, 4, 14, 48),
+  },
+  {
+    name: 'a full date without suffix and with 12 AM',
+    message: 'try again at January 2, 2027 12:05 AM',
+    now: new Date(2026, 10, 11, 10, 0),
+    expected: new Date(2027, 0, 2, 0, 5),
+  },
 ]) {
   test(`parseResetTime: ${name}`, () => {
     const original = now.getTime();
