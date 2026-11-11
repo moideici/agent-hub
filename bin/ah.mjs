@@ -5,6 +5,7 @@ import { cmdStatus, cmdShow, cmdMerge, cmdClean } from '../lib/runs.mjs';
 import { cmdAccounts, cmdDoctor, cmdInit } from '../lib/admin.mjs';
 import { cmdTask, cmdMsg, cmdSay, cmdWatch, cmdInboxHook, cmdWhoami, cmdServe } from '../lib/coord-cli.mjs';
 import { cmdQueue, cmdWait, cmdLock, cmdBrief } from '../lib/coord-cmds.mjs';
+import { cmdGpu, cmdOllama, cmdBench } from '../lib/ollama-cmds.mjs';
 
 const HELP = `ah — agent-hub : délègue des tâches de code à Codex (GPT, OAuth ChatGPT) dans des worktrees git isolés.
 
@@ -28,6 +29,11 @@ Coordination (sessions Claude, Codex, utilisateur) :
   ah task list|show|next|claim|set|dispatch                 tâches partagées (dispatch = lance Codex)
   ah task queue T-1 [T-2] [--acct a|b|any]                  en file : part toute seule dès qu'une place se libère
   ah task answer T-1 "réponse"                              répond à la question d'un run Codex
+  ah task escalate T-1 [--acct a|b] | --dismiss             envoie à ChatGPT une tâche qu'un modèle local a ratée (après ta vérification)
+  ah run … --acct 9b|27b|local                              même chose avec un modèle local (Ollama), un seul à la fois
+  ah gpu                                                    mémoire de la carte et qui l'occupe
+  ah ollama status | setup [nom] | smoke [nom]              état, préparation (modèles dérivés), essai rapide
+  ah bench run --models 9b,27b [--levels 0-6] [--tasks ids] benchmark des modèles locaux (bench/ollama/tasks)
   ah task result T-1 [--text …] [--data f.json] · results    résultat structuré d'une tâche
   ah task archive T-1 | archive --done · unarchive · delete --yes
   ah queue [pump]                                           état de la file d'attente
@@ -45,7 +51,7 @@ Le brief "-" est lu sur stdin.`;
 
 const BOOL = new Set([
   'json', 'help', 'include-dirty', 'no-tests', 'squash', 'force', 'all', 'patch', 'verbose', 'peek', 'hook', 'open',
-  'any', 'done', 'yes', 'archived',
+  'any', 'done', 'yes', 'archived', 'dismiss', 'keep',
 ]);
 
 function parse(argv) {
@@ -89,6 +95,9 @@ try {
     case 'lock': cmdLock(opts); break;
     case 'unlock': cmdLock(opts, true); break;
     case 'brief': cmdBrief(opts); break;
+    case 'gpu': await cmdGpu(opts); break;
+    case 'ollama': await cmdOllama(opts); break;
+    case 'bench': await cmdBench(opts); break;
     case undefined: case 'help': case '--help': case '-h': console.log(HELP); break;
     default:
       console.error(`commande inconnue: ${cmd}\n`);

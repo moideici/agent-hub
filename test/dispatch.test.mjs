@@ -105,7 +105,7 @@ test('run lié à une tâche qui échoue avant de démarrer => tâche "failed" (
   });
   assert.equal(r.status, 1);
   assert.equal(bus.getTask(t.id).status, 'failed');
-  assert.match(bus.getTask(t.id).notes.at(-1).text, /avant de démarrer/);
+  assert.match(bus.getTask(t.id).notes.at(-1).text, /Run interrompu.*avant son verdict/);
   // un run déjà démarré (runId posé) n'est pas écrasé
   const t2 = mk('démarré');
   bus.updateTask(t2.id, { status: 'running', runId: 'r-1' });
