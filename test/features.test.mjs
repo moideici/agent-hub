@@ -246,3 +246,32 @@ test('audit en lecture seule : aucune branche ni worktree laissés, rapport cons
   assert.ok(!fs.existsSync(run.worktree));
   assert.match(run.summary, /created agent_out\.txt/); // le rapport reste dans le run
 });
+
+test('identifiants de run uniques : trois runs simultanés au même titre ne se marchent plus dessus', async () => {
+  const t = setup();
+  const { spawn } = await import('node:child_process');
+  const start = () => new Promise((resolve) => {
+    const p = spawn(process.execPath, [AH, 'run', t.brief, '--title', 'même titre', '--json', '--acct', 'a'], { cwd: t.repo, env: { ...process.env, AH_HOME: t.hub, AH_CODEX_BIN: FAKE, FAKE_LOG: t.tmp, AH_AGENT: 'claude:me' }, windowsHide: true });
+    let out = '';
+    p.stdout.on('data', (d) => (out += d));
+    p.on('close', (code) => resolve({ code, out }));
+  });
+  const results = await Promise.all([start(), start(), start()]);
+  assert.deepEqual(results.map((r) => r.code), [0, 0, 0], results.map((r) => r.out.slice(-200)).join('\n'));
+  const ids = results.map((r) => JSON.parse(r.out).id);
+  assert.equal(new Set(ids).size, 3, `ids: ${ids.join(', ')}`);
+  assert.ok(ids.every((id) => /-[0-9a-f]{4}$/.test(id)));
+});
+
+test('run mort avant son verdict : sa tâche échoue au lieu de rester « en cours »', async () => {
+  const t = setup();
+  process.env.AH_HOME = t.hub;
+  const bus = await import(`../lib/bus.mjs?crash=${Date.now()}`);
+  const task = bus.addTask({ title: 'crash' });
+  bus.updateTask(task.id, { status: 'running', runId: 'run-1' });
+  assert.equal(bus.failTaskIfRunning(task.id, 'run-2', 'autre run'), null); // un autre run ne la touche pas
+  assert.equal(bus.getTask(task.id).status, 'running');
+  assert.equal(bus.failTaskIfRunning(task.id, 'run-1', 'crash').status, 'failed');
+  assert.match(bus.getTask(task.id).notes.at(-1).text, /Run interrompu: crash/);
+  assert.equal(bus.failTaskIfRunning(task.id, 'run-1', 'encore'), null); // déjà échouée : rien à faire
+});
