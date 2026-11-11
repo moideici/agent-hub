@@ -1,6 +1,6 @@
 # agent-hub (`ah`)
 
-Dépôt : <https://github.com/moidefr/agent-hub> (privé) · dernière mise à jour de la doc : 04/11/2026 · 80 tests.
+Dépôt : <https://github.com/moideici/agent-hub> (privé) · dernière mise à jour de la doc : 04/11/2026 · 80 tests.
 
 Permet à **Claude Code** de déléguer des tâches de code à **Codex (GPT, connexion OAuth ChatGPT)** et de
 faire relire son travail par un second modèle, **dans n'importe quel dépôt git**, sans rien installer dans
