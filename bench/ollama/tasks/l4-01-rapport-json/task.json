@@ -1,0 +1,10 @@
+{
+  "id": "l4-01-rapport-json",
+  "level": 4,
+  "title": "Ajouter une sortie JSON au rapport",
+  "skills": [
+    "architecture",
+    "options",
+    "sérialisation"
+  ]
+}

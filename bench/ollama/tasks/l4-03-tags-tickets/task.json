@@ -1,0 +1,10 @@
+{
+  "id": "l4-03-tags-tickets",
+  "level": 4,
+  "title": "Propager les tags des tickets",
+  "skills": [
+    "architecture",
+    "normalisation",
+    "immutabilité"
+  ]
+}

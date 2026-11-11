@@ -1,0 +1,10 @@
+{
+  "id": "l3-02-panier-immuable",
+  "level": 3,
+  "title": "Préserver les anciens paniers",
+  "skills": [
+    "lecture",
+    "bug",
+    "immutabilité"
+  ]
+}
