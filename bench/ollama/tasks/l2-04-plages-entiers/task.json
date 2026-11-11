@@ -1,0 +1,10 @@
+{
+  "id": "l2-04-plages-entiers",
+  "level": 2,
+  "title": "Développer une sélection de numéros",
+  "skills": [
+    "parsing",
+    "validation",
+    "ensemble"
+  ]
+}

@@ -1,0 +1,9 @@
+{
+  "id": "l2-01-duree",
+  "level": 2,
+  "title": "Analyser une durée composée",
+  "skills": [
+    "parsing",
+    "validation"
+  ]
+}
