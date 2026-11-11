@@ -213,3 +213,39 @@ test('nextStatuses et stateSignature', () => {
   assert.equal(L.stateSignature({ now: 'a', x: 1 }), L.stateSignature({ now: 'b', x: 1 })); // l'horloge ne compte pas
   assert.notEqual(L.stateSignature({ x: 1 }), L.stateSignature({ x: 2 }));
 });
+
+test('modèles locaux : noms, type d’agent, lancement partagé avec ChatGPT', () => {
+  const state = {
+    accounts: [{ name: 'a', loggedIn: true, limitedUntil: null }],
+    local: [{ id: 'ollama:9b', name: '9b', label: 'Bonsai 9B', state: 'idle' }, { id: 'ollama:27b', name: '27b', label: 'Bonsai 27B', state: 'idle' }],
+    tasks: [], limits: { maxParallelCodex: 1 },
+  };
+  assert.equal(L.agentKind('ollama:9b'), 'local');
+  assert.equal(L.agentName('ollama:9b', state), 'Bonsai 9B');
+  assert.equal(L.agentName('ollama:zz', state), 'Local zz');
+  assert.equal(L.runWho({ backend: 'ollama', account: '9b' }), 'ollama:9b');
+  assert.equal(L.runWho({ account: 'a' }), 'codex:a');
+
+  const t = task({ status: 'todo' });
+  const ok = L.canDispatch(t, state);
+  assert.equal(ok.ok, true);
+  assert.deepEqual(ok.accounts.map((a) => [a.name, a.disabled]), [['a', false], ['9b', false], ['27b', false]]);
+
+  // un seul travail local à la fois : les deux modèles sont indisponibles, ChatGPT reste lançable
+  const busy = { ...state, tasks: [task({ id: 'T-9', status: 'running', assignee: 'ollama:9b' })] };
+  const r = L.canDispatch(t, busy);
+  assert.equal(r.ok, true);
+  assert.deepEqual(r.accounts.filter((a) => a.local).map((a) => a.disabled), [true, true]);
+  assert.match(r.accounts.find((a) => a.name === '9b').reason, /déjà en cours/);
+
+  // ChatGPT plein : seul le local reste ; Ollama arrêté en plus : plus rien
+  const full = { ...state, tasks: [task({ id: 'T-8', status: 'running', assignee: 'codex:a' })] };
+  const f = L.canDispatch(t, full);
+  assert.equal(f.ok, true);
+  assert.equal(f.accounts.find((a) => a.name === 'a').disabled, true);
+  const none = L.canDispatch(t, { ...full, local: full.local.map((l) => ({ ...l, state: 'down' })) });
+  assert.equal(none.ok, false);
+
+  const feed = L.runningNow({ runs: [{ status: 'running', id: 'r', title: 'x', account: '9b', backend: 'ollama' }], sessions: [] });
+  assert.equal(feed[0].who, 'ollama:9b');
+});

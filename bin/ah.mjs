@@ -50,7 +50,7 @@ Codes de sortie de \`run\`: 0 ok · 1 échec · 2 quota atteint · 3 timeout · 
 Le brief "-" est lu sur stdin.`;
 
 const BOOL = new Set([
-  'json', 'help', 'include-dirty', 'no-tests', 'squash', 'force', 'all', 'patch', 'verbose', 'peek', 'hook', 'open',
+  'json', 'help', 'include-dirty', 'no-tests', 'squash', 'force', 'all', 'patch', 'verbose', 'peek', 'hook', 'open', 'no-escalate',
   'any', 'done', 'yes', 'archived', 'dismiss', 'keep',
 ]);
 

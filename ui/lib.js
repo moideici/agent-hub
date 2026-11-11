@@ -62,8 +62,14 @@ export function agentKind(id) {
   if (id === 'user') return 'user';
   if (id === '*') return 'all';
   if (String(id).startsWith('codex:')) return 'codex';
+  if (String(id).startsWith('ollama:')) return 'local';
   if (String(id).startsWith('claude:')) return 'claude';
   return 'other';
+}
+
+/** Identifiant d'agent d'un run : ChatGPT (codex:a) ou modèle local (ollama:9b). */
+export function runWho(r) {
+  return r?.backend === 'ollama' ? `ollama:${r.account || '?'}` : `codex:${r?.account || '?'}`;
 }
 
 /** Nom lisible d'un agent à partir de son identifiant. */
@@ -72,6 +78,7 @@ export function agentName(id, state) {
   if (id === 'user') return 'Toi';
   if (id === '*') return 'Tout le monde';
   if (id.startsWith('codex:')) return `ChatGPT ${id.slice(6)}`;
+  if (id.startsWith('ollama:')) return state?.local?.find((l) => l.id === id)?.label || `Local ${id.slice(7)}`;
   if (id.startsWith('claude:')) return state?.sessions?.find((s) => s.id === id)?.title || 'Conversation Claude';
   return id;
 }
@@ -214,7 +221,7 @@ export function runLiveText(run) {
 export function runningNow(state) {
   const runs = (state?.runs || [])
     .filter((r) => r.status === 'running')
-    .map((r) => ({ type: 'run', id: r.id, title: r.title, who: `codex:${r.account || '?'}`, detail: runLiveText(r), since: r.startedAt, project: r.projectName, files: r.progress?.files?.length || 0 }));
+    .map((r) => ({ type: 'run', id: r.id, title: r.title, who: runWho(r), detail: runLiveText(r), since: r.startedAt, project: r.projectName, files: r.progress?.files?.length || 0 }));
   const sessions = (state?.sessions || [])
     .filter((s) => s.status === 'running')
     .map((s) => ({ type: 'session', id: s.id, title: s.title, who: s.id, detail: s.now, since: s.lastActivityAt, project: s.projectName }));
@@ -286,7 +293,7 @@ export function activityFeed(state, limit = 30, now = Date.now()) {
   }
   for (const r of state?.runs || []) {
     if (now - Date.parse(r.startedAt || 0) > 7 * DAY) continue;
-    const who = `codex:${r.account || '?'}`;
+    const who = runWho(r);
     out.push({ ts: r.startedAt, kind: 'run', who, text: `Travail lancé : ${r.title}`, runId: r.id });
     if (r.endedAt) out.push({ ts: r.endedAt, kind: 'run', who, text: `Travail ${(STATUS_LABEL[r.status] || r.status).toLowerCase()} : ${r.title}`, runId: r.id });
   }
@@ -328,7 +335,17 @@ export function canDispatch(task, state) {
     disabled: !!a.limitedUntil || a.loggedIn === false,
     reason: a.loggedIn === false ? 'non connecté' : a.limitedUntil ? `quota atteint jusqu'à ${clockTime(a.limitedUntil)}` : '',
   }));
-  const fail = (reason) => ({ ok: false, reason, accounts });
+  // modèles locaux (Ollama) : un seul à la fois, la carte graphique est partagée
+  const localBusy = (state?.tasks || []).some((t) => t.status === 'running' && String(t.assignee || '').startsWith('ollama:'));
+  const local = (state?.local || []).map((l) => ({
+    name: l.name,
+    local: true,
+    label: l.label || l.name,
+    disabled: l.state === 'down' || localBusy,
+    reason: l.state === 'down' ? "Ollama ne répond pas" : localBusy ? 'un travail local est déjà en cours' : '',
+  }));
+  const all = [...accounts, ...local];
+  const fail = (reason) => ({ ok: false, reason, accounts: all });
   if (!task) return fail('Tâche introuvable.');
   if (!task.project) return fail("Cette tâche n'a pas de dossier de projet.");
   if (!['todo', 'queued', 'claimed', 'blocked', 'failed'].includes(task.status)) return fail(`La tâche est « ${(STATUS_LABEL[task.status] || task.status).toLowerCase()} ».`);
@@ -336,9 +353,10 @@ export function canDispatch(task, state) {
   if (pending.length) return fail(`Attend ${pending.join(', ')}.`);
   const max = state?.limits?.maxParallelCodex ?? 3;
   const inFlight = (state?.tasks || []).filter((t) => t.status === 'running' && String(t.assignee || '').startsWith('codex:')).length;
-  if (inFlight >= max) return fail(`${inFlight} travaux ChatGPT en cours (maximum ${max}).`);
-  if (!accounts.length || accounts.every((a) => a.disabled)) return fail('Aucun compte ChatGPT disponible.');
-  return { ok: true, reason: '', accounts };
+  // ChatGPT plein n'empêche pas le local (et inversement) : on ne bloque que si plus rien n'est lançable
+  if (inFlight >= max) for (const a of all) if (!a.local) Object.assign(a, { disabled: true, reason: `${inFlight} travaux ChatGPT en cours (maximum ${max})` });
+  if (all.every((a) => a.disabled)) return fail(inFlight >= max && !local.length ? `${inFlight} travaux ChatGPT en cours (maximum ${max}).` : 'Aucun compte ou modèle disponible.');
+  return { ok: true, reason: '', accounts: all };
 }
 
 /** Peut-on mettre cette tâche en file d'attente (elle attendra une place libre) ? */

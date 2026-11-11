@@ -247,7 +247,7 @@ function avatar(id, small = false) {
   const kind = L.agentKind(id);
   const label = L.agentName(id, state());
   return h('span', { class: `avatar ${small ? 'sm' : ''} ${kind}`, style: kind === 'claude' ? `--h:${L.hueOf(id)}` : null, title: label },
-    kind === 'all' ? '*' : L.initials(kind === 'codex' ? label.replace('ChatGPT ', 'G') : label));
+    kind === 'all' ? '*' : L.initials(kind === 'codex' ? label.replace('ChatGPT ', 'G') : kind === 'local' ? `L${String(id).slice(7)}` : label));
 }
 
 function openTarget(t) {
@@ -427,6 +427,13 @@ function codexView(st) {
       h('div', { class: 'stat' }, a.running ? h('span', { class: 'chip s-running' }, `${a.running} travail${a.running > 1 ? 'x' : ''} en cours`) : 'Aucun travail en cours'),
       a.note?.note ? h('div', { class: 'muted' }, a.note.note) : null);
   }));
+  const localCards = (st.local || []).length ? h('div', { class: 'accounts' }, st.local.map((l) =>
+    h('div', { class: 'card account' },
+      h('div', { class: 'name' }, avatar(l.id), l.label || l.name, h('span', { class: 'chip plain' }, l.role === 'reviewer' ? 'relecteur' : 'ouvrier')),
+      h('div', { class: 'stat' }, l.state === 'down' ? chip('failed', 'Ollama ne répond pas') : l.state === 'loaded' ? chip('done', `En mémoire · ${l.sizeVramMiB} Mo de carte`) : h('span', { class: 'chip plain' }, 'Au repos (se charge au lancement)')),
+      h('div', { class: 'stat' }, l.running ? h('span', { class: 'chip s-running' }, 'Travail en cours') : 'Aucun travail en cours', ` · contexte ${l.ctx}${l.think != null ? ` · réflexion ${l.think}` : ''}`),
+      h('div', { class: 'muted' }, l.model)))) : null;
+  const gpuLine = st.gpu ? h('p', { class: 'muted' }, `Carte graphique : ${st.gpu.name}, ${st.gpu.usedMiB} / ${st.gpu.totalMiB} Mo utilisés, ${st.gpu.freeMiB} Mo libres.`) : null;
   const byProject = new Map();
   for (const r of st.runs.slice(0, 30)) {
     const k = r.projectKey || '';
@@ -438,7 +445,7 @@ function codexView(st) {
       chip(r.status === 'needs-input' ? 'waiting' : r.status),
       h('span', { class: 'grow' }, h('div', { class: 'title clip' }, r.title),
         r.status === 'running' ? h('div', { class: 'live-line' }, h('span', { class: 'dot live' }), h('span', { class: 'clip' }, L.runLiveText(r)))
-          : h('div', { class: 'stat' }, `Compte ${r.account || '?'}`, r.durationSec != null ? L.formatDuration(r.durationSec) : null,
+          : h('div', { class: 'stat' }, r.backend === 'ollama' ? `Local ${r.account || '?'}` : `Compte ${r.account || '?'}`, r.durationSec != null ? L.formatDuration(r.durationSec) : null,
             r.readOnly ? 'audit en lecture seule' : r.changes ? `${r.changes.files} fichier${r.changes.files > 1 ? 's' : ''} modifié${r.changes.files > 1 ? 's' : ''}` : null,
             r.fixes ? `${r.fixes} correction${r.fixes > 1 ? 's' : ''} auto` : null,
             r.tests && !r.tests.skipped ? chip(r.tests.passed ? 'done' : 'failed', r.tests.passed ? 'Tests OK' : 'Tests en échec') : null)),
@@ -446,6 +453,7 @@ function codexView(st) {
   return h('div', {},
     h('p', { class: 'intro' }, 'ChatGPT est ton deuxième ouvrier. Dans une tâche, clique sur « Lancer sur ChatGPT » : il travaille à part, dans une copie du projet, puis te rend son résultat à valider. Ses comptes ont un quota : s’il est atteint, la tâche patiente en file d’attente.'),
     accounts,
+    localCards ? [sectionTitle('Modèles sur ton PC', null, 'Gratuits, privés, un seul à la fois : ils se partagent la carte graphique.'), localCards, gpuLine] : null,
     sectionTitle('Travaux récents'),
     byProject.size ? [...byProject.values()].map((g) =>
       h('section', { class: 'group' }, h('div', { class: 'group-head' }, icon('folder', 17), h('h2', {}, g.name), h('span', { class: 'faint' }, `${g.runs.length} travail${g.runs.length > 1 ? 'x' : ''}`)),
@@ -465,7 +473,7 @@ function messagesView(st) {
         h('div', { class: 'body' }, m.body)));
 
   const to = h('select', { class: 'input', 'aria-label': 'Destinataire', style: 'width:220px' },
-    [['*', 'Tout le monde'], ['codex:a', 'ChatGPT a'], ['codex:b', 'ChatGPT b'], ...st.sessions.filter((s) => s.status === 'running' || Date.now() - Date.parse(s.lastActivityAt || 0) < 7 * 864e5).map((s) => [s.id, s.title])]
+    [['*', 'Tout le monde'], ['codex:a', 'ChatGPT a'], ['codex:b', 'ChatGPT b'], ...(st.local || []).map((l) => [l.id, l.label]), ...st.sessions.filter((s) => s.status === 'running' || Date.now() - Date.parse(s.lastActivityAt || 0) < 7 * 864e5).map((s) => [s.id, s.title])]
       .map(([v, t]) => h('option', { value: v }, t)));
   const text = h('textarea', { class: 'input', rows: 1, placeholder: 'Écrire un message… (Entrée pour envoyer, Maj+Entrée pour un retour à la ligne)', 'aria-label': 'Message', value: S.drafts.msg || '' });
   text.addEventListener('input', () => (S.drafts.msg = text.value));
@@ -603,15 +611,17 @@ function taskPanel(t, full) {
   // — Actions
   const confirmBox = h('div', { hidden: true });
   let account = dispatch.accounts.find((a) => !a.disabled)?.name || '';
+  const pickedLocal = () => dispatch.accounts.find((a) => a.name === account)?.local;
   const accountPick = h('div', { class: 'actions' }, dispatch.accounts.map((a) =>
     h('label', { class: 'check', title: a.reason || '' }, h('input', { type: 'radio', name: 'acct', value: a.name, disabled: a.disabled, checked: a.name === account, on: { change: () => (account = a.name) } }),
-      `Compte ${a.name}${a.reason ? ` (${a.reason})` : ''}`)));
+      `${a.local ? a.label : `ChatGPT ${a.name}`}${a.reason ? ` (${a.reason})` : ''}`)));
   const launch = () => {
     confirmBox.hidden = false;
+    const local = pickedLocal();
     confirmBox.replaceChildren(h('div', { class: 'confirm' },
-      h('div', {}, `Lancer « ${t.title} » sur ChatGPT (compte ${account}) maintenant ? Cela consomme du quota ChatGPT.`),
+      h('div', {}, local ? `Lancer « ${t.title} » sur ton modèle local (${account}) maintenant ? Gratuit, mais il occupe la carte graphique pendant le travail.` : `Lancer « ${t.title} » sur ChatGPT (compte ${account}) maintenant ? Cela consomme du quota ChatGPT.`),
       h('div', { class: 'actions' },
-        h('button', { class: 'btn primary sm', on: { click: () => act(() => api(`/api/tasks/${encodeURIComponent(t.id)}/dispatch`, 'POST', { account }), `${t.id} lancée sur ChatGPT ${account}`) } }, 'Oui, lancer'),
+        h('button', { class: 'btn primary sm', on: { click: () => act(() => api(`/api/tasks/${encodeURIComponent(t.id)}/dispatch`, 'POST', { account }), `${t.id} lancée sur ${local ? account : `ChatGPT ${account}`}`) } }, 'Oui, lancer'),
         h('button', { class: 'btn sm', on: { click: () => (confirmBox.hidden = true) } }, 'Annuler'))));
   };
   const showLaunch = ['todo', 'queued', 'claimed', 'blocked', 'failed'].includes(t.status);
@@ -625,6 +635,26 @@ function taskPanel(t, full) {
     dispatch.ok ? null : h('p', { class: 'muted', style: 'margin-top:10px' }, dispatch.reason),
     confirmBox) : null;
 
+  // — Escalade vers ChatGPT : préparée après un échec local, jamais envoyée sans que tu aies relu le brief
+  const escalationBox = (() => {
+    if (t.escalation?.state !== 'proposed') return null;
+    const brief = h('div', { class: 'pre mono', style: 'max-height:260px;overflow:auto' }, 'Chargement du brief…');
+    api(`/api/tasks/${encodeURIComponent(t.id)}/escalation`).then((e) => { brief.textContent = e.brief; }, (e) => { brief.textContent = e.message; });
+    const free = st.accounts.filter((a) => !a.limitedUntil && a.loggedIn !== false);
+    let target = free[0]?.name || '';
+    const pick = h('div', { class: 'actions' }, st.accounts.map((a) => {
+      const off = !!a.limitedUntil || a.loggedIn === false;
+      return h('label', { class: 'check' }, h('input', { type: 'radio', name: 'esc', value: a.name, disabled: off, checked: a.name === target, on: { change: () => (target = a.name) } }), `ChatGPT ${a.name}${off ? ' (indisponible)' : ''}`);
+    }));
+    return section('Le modèle local a échoué : l’envoyer à ChatGPT ?',
+      h('p', { class: 'muted', style: 'margin-bottom:10px' }, 'Un brief a été préparé (tâche, tentative locale, tests, modifications). Rien n’est envoyé tant que tu ne l’as pas relu et validé ici.'),
+      h('details', { open: true }, h('summary', { class: 'muted' }, 'Brief préparé'), brief),
+      h('div', { style: 'margin-top:12px;display:grid;gap:10px' }, pick,
+        h('div', { class: 'actions' },
+          h('button', { class: 'btn primary', disabled: !target, on: { click: () => act(() => api(`/api/tasks/${encodeURIComponent(t.id)}/escalate`, 'POST', { account: target }), `${t.id} envoyée à ChatGPT ${target}`) } }, icon('send', 16), 'J’ai relu : envoyer à ChatGPT'),
+          h('button', { class: 'btn', on: { click: () => act(() => api(`/api/tasks/${encodeURIComponent(t.id)}/escalate`, 'POST', { dismiss: true }), 'Escalade écartée') } }, 'Écarter'))));
+  })();
+
   const statusButtons = h('div', { class: 'actions' },
     t.status === 'review' ? h('button', { class: 'btn good', on: { click: () => setStatus('done', 'Validée') } }, icon('check', 17), 'Valider : marquer terminée') : null,
     ...L.nextStatuses(t.status).filter((s) => !(t.status === 'review' && s === 'done')).map((s) =>
@@ -635,7 +665,7 @@ function taskPanel(t, full) {
   const note = draft(`note:${t.id}`, h('textarea', { class: 'input', rows: 2, placeholder: 'Ajouter une note…', 'aria-label': 'Note' }));
   const assignee = h('select', { class: 'input', 'aria-label': 'Assigner à', on: { change: (e) => act(() => api(`/api/tasks/${encodeURIComponent(t.id)}`, 'PATCH', { assignee: e.target.value || null })) } },
     h('option', { value: '' }, 'Non assignée'),
-    [{ id: 'codex:a' }, { id: 'codex:b' }, ...st.sessions.filter((s) => s.status === 'running' || s.id === t.assignee)].map((a) => h('option', { value: a.id, selected: a.id === t.assignee }, name(a.id))));
+    [{ id: 'codex:a' }, { id: 'codex:b' }, ...(st.local || []).map((l) => ({ id: l.id })), ...st.sessions.filter((s) => s.status === 'running' || s.id === t.assignee)].map((a) => h('option', { value: a.id, selected: a.id === t.assignee }, name(a.id))));
 
   return {
     title: t.title,
@@ -645,6 +675,7 @@ function taskPanel(t, full) {
       answerBox,
       liveBox,
       resultBox,
+      escalationBox,
       section('Que faire ?', statusButtons),
       launchBox,
       t.brief ? section('Détail de la tâche', h('div', { class: 'pre' }, t.brief)) : null,
@@ -730,7 +761,7 @@ function openNewTask() {
   const preselect = S.filters.project && S.filters.project !== '__none' && known.find((p) => p.key === S.filters.project)?.path;
   const project = h('select', { class: 'input', 'aria-label': 'Projet' }, h('option', { value: '' }, 'Aucun projet'), known.map((p) => h('option', { value: p.path, selected: p.path === preselect }, `${p.name}`)));
   const assignee = h('select', { class: 'input', 'aria-label': 'Confier à' }, h('option', { value: '' }, 'Personne pour l’instant'),
-    ['codex:a', 'codex:b'].map((a) => h('option', { value: a }, name(a))), st.sessions.filter((s) => s.status === 'running').map((s) => h('option', { value: s.id }, s.title)));
+    ['codex:a', 'codex:b', ...(st.local || []).map((l) => l.id)].map((a) => h('option', { value: a }, name(a))), st.sessions.filter((s) => s.status === 'running').map((s) => h('option', { value: s.id }, s.title)));
   const audit = h('input', { type: 'checkbox' });
   const prio = h('select', { class: 'input', 'aria-label': 'Priorité' }, L.PRIORITY_LABEL.map((l, i) => h('option', { value: i, selected: i === 1 }, l)));
   const open = st.tasks.filter(L.isOpen);

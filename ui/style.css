@@ -131,7 +131,7 @@ button.row:hover, a.row:hover { background: var(--raised); }
 @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .avatar { color: hsl(var(--h) 80% 78%); background: hsl(var(--h) 40% 22%); } }
 :root[data-theme="dark"] .avatar { color: hsl(var(--h) 80% 78%); background: hsl(var(--h) 40% 22%); }
 .avatar.sm { width: 24px; height: 24px; font-size: 10px; }
-.avatar.codex { --h: 160; } .avatar.user { --h: 215; }
+.avatar.codex { --h: 160; } .avatar.local { --h: 28; } .avatar.user { --h: 215; }
 
 .progress { height: 7px; border-radius: 99px; background: var(--line-soft); overflow: hidden; }
 .progress > i { display: block; height: 100%; background: var(--good); border-radius: inherit; }
