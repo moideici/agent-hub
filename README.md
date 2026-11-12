@@ -1,6 +1,6 @@
 # agent-hub (`ah`)
 
-Dépôt : <https://github.com/moideici/agent-hub> (privé) · dernière mise à jour de la doc : 04/11/2026 · 80 tests.
+Dépôt : <https://github.com/moideici/agent-hub> · dernière mise à jour de la doc : 04/11/2026 · 80 tests.
 
 Permet à **Claude Code** de déléguer des tâches de code à **Codex (GPT, connexion OAuth ChatGPT)** et de
 faire relire son travail par un second modèle, **dans n'importe quel dépôt git**, sans rien installer dans
@@ -27,10 +27,10 @@ ah show --patch  →  relecture  →  ah merge   (ou ah clean)
   (branches `agent/*`, worktrees, `AGENTS.md`).
 - **Zéro dépendance** : Node ≥ 20, git, Codex CLI.
 
-## Installation (déjà faite sur ce PC)
+## Installation
 ```powershell
 npm i -g @openai/codex          # Codex CLI
-cd C:\Users\gabor\code\agent-hub
+cd %USERPROFILE%\code\agent-hub
 npm link                        # expose la commande `ah`
 # skill pour Claude Code, valable pour tous les projets (junction vers ce dépôt) :
 New-Item -ItemType Junction -Path $env:USERPROFILE\.claude\skills\delegate -Target (Resolve-Path skills\delegate)
@@ -185,3 +185,7 @@ Structure :
   lancement, file) · `lib/sessions.mjs` (lecture des sessions Claude) · `lib/server.mjs` (dashboard sécurisé) · `lib/coord-cli.mjs`, `lib/coord-cmds.mjs` (commandes).
 - Interface : `ui/` (`app.js`, `lib.js` pur et testé, `style.css`, `icons.js`, aucune dépendance).
 - `skills/delegate/SKILL.md` (mode d'emploi pour Claude Code) · `docs/` (coordination, fonctions avancées).
+
+## Licence
+
+Code publié sous [licence MIT](LICENSE). Historique des versions : [CHANGELOG.md](CHANGELOG.md).
